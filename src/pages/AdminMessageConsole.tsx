@@ -21,7 +21,7 @@ import {
   type TestIdentity,
   type TestMessage,
 } from "@/data/testConversations";
-import { detectArrangementFromMessage } from "@/lib/arrangementDetection";
+import { recognizeArrangementFromMessage } from "@/lib/arrangementRecognitionProvider";
 import { formatBubbleTime, formatTimeLabel } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
@@ -81,6 +81,7 @@ export default function AdminMessageConsole() {
   const [groupNote, setGroupNote] = React.useState("");
   const [messageText, setMessageText] = React.useState("");
   const [messageTextFocused, setMessageTextFocused] = React.useState(false);
+  const [sendingMessage, setSendingMessage] = React.useState(false);
   const [detectedArrangementTitle, setDetectedArrangementTitle] =
     React.useState<string | null>(null);
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
@@ -111,6 +112,7 @@ export default function AdminMessageConsole() {
   const canSendMessage = Boolean(
     activeIdentity &&
       messageText.trim() &&
+      !sendingMessage &&
       (messageMode === "private" || activeGroup)
   );
   const sortedIdentities = React.useMemo(
@@ -305,9 +307,10 @@ export default function AdminMessageConsole() {
     setGroupNote("");
   };
 
-  const handleSendMessage = () => {
+  const handleSendMessage = async () => {
     if (!activeIdentity || !messageText.trim()) return;
     if (messageMode === "group" && !activeGroup) return;
+    if (sendingMessage) return;
 
     const text = messageText.trim();
     const nextMessage =
@@ -321,19 +324,24 @@ export default function AdminMessageConsole() {
       return nextMessages;
     });
 
-    const detectedDraft = detectArrangementFromMessage(nextMessage, {
-      conversationTitle:
-        messageMode === "group" && activeGroup ? activeGroup.name : activeIdentity.name,
-      senderName: activeIdentity.name,
-      senderAvatarLabel: activeIdentity.avatarLabel,
-    });
-    if (detectedDraft) {
-      persistPendingArrangementDraft(detectedDraft);
-      setDetectedArrangementTitle(detectedDraft.title);
-    } else {
-      setDetectedArrangementTitle(null);
-    }
+    setSendingMessage(true);
     setMessageText("");
+    try {
+      const detectedDraft = await recognizeArrangementFromMessage(nextMessage, {
+        conversationTitle:
+          messageMode === "group" && activeGroup ? activeGroup.name : activeIdentity.name,
+        senderName: activeIdentity.name,
+        senderAvatarLabel: activeIdentity.avatarLabel,
+      });
+      if (detectedDraft) {
+        persistPendingArrangementDraft(detectedDraft);
+        setDetectedArrangementTitle(detectedDraft.title);
+        return;
+      }
+      setDetectedArrangementTitle(null);
+    } finally {
+      setSendingMessage(false);
+    }
   };
 
   const handleMessageKeyDown = (
@@ -536,7 +544,7 @@ export default function AdminMessageConsole() {
                   </div>
                   <div className="ml-auto flex shrink-0 items-center gap-3">
                     <span className="text-[12px] leading-5 text-text-tertiary">
-                      Enter发送 / Shift+Enter换行
+                      {sendingMessage ? "正在识别..." : "Enter发送 / Shift+Enter换行"}
                     </span>
                     <button
                       type="button"
