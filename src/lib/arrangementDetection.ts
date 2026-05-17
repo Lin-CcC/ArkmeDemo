@@ -1,7 +1,7 @@
 import type { TestConversationType, TestMessage } from "@/data/testConversations";
 import type { ArrangementDraft, ArrangementPriority } from "@/types/arrangement";
 
-type ArrangementDetectionContext = {
+export type ArrangementDetectionContext = {
   conversationTitle: string;
   senderName: string;
   senderAvatarLabel?: string;
@@ -69,14 +69,14 @@ export function detectArrangementFromMessage(
   };
 }
 
-function detectTimeText(text: string) {
+export function detectTimeText(text: string) {
   const dayMatch = text.match(/今天|明天|后天|大后天|本周|这周|下周|周[一二三四五六日天]|星期[一二三四五六日天]/)?.[0];
   const periodMatch = text.match(/早上|上午|中午|下午|晚上|今晚|傍晚/)?.[0];
   const clockMatch = text.match(/\d{1,2}[:：点]\d{0,2}/)?.[0];
   return [dayMatch, periodMatch, clockMatch].filter(Boolean).join(" ") || undefined;
 }
 
-function detectPriority(text: string): ArrangementPriority {
+export function detectPriority(text: string): ArrangementPriority {
   const important = /一定|必须|务必|重要|记得|复查|面试/.test(text);
   const urgent = /今天|明天|马上|尽快|上午|下午|晚上/.test(text);
   if (important && urgent) return "important_urgent";
@@ -85,7 +85,7 @@ function detectPriority(text: string): ArrangementPriority {
   return "not_important_not_urgent";
 }
 
-function detectPrimaryTagId(text: string) {
+export function detectPrimaryTagId(text: string) {
   if (/医院|体检|检查|复查|挂号|身体/.test(text)) return "health";
   if (/作业|考试|课程|阅读|学校|学习/.test(text)) return "study";
   if (/公司|会议|开会|客户|面试|工作/.test(text)) return "work";
@@ -94,7 +94,7 @@ function detectPrimaryTagId(text: string) {
   return "other";
 }
 
-function buildDetectedTitle(text: string) {
+export function buildDetectedTitle(text: string) {
   const cleaned = text
     .replace(/^(好的|好|嗯|收到|帮我|记得|一定要|请你|麻烦你)[，,。.\s]*/g, "")
     .replace(/[，,。.!！?？]+$/g, "")

@@ -44,7 +44,7 @@ export default function AiSettingsScreen({ onBack }: AiSettingsScreenProps) {
         <div className="min-w-0">
           <h1 className="text-[17px] font-semibold leading-6 text-text">AI 识别设置</h1>
           <p className="truncate text-[12px] leading-4 text-text-muted">
-            仅保存本地设置，当前识别使用本地模拟。
+            保存后会优先用于消息识别。
           </p>
         </div>
       </header>
@@ -65,7 +65,7 @@ export default function AiSettingsScreen({ onBack }: AiSettingsScreenProps) {
             />
           </label>
           <p className="mt-3 text-[12px] leading-5 text-text-muted">
-            这个 Demo 只会把输入内容保存在当前浏览器本地。V1 不会把它用于真实大模型请求，消息识别流程仍走本地模拟。
+            这个 Demo 只会把输入内容保存在当前浏览器本地。没有填写或识别失败时，消息仍会用本地规则继续判断。
           </p>
 
           <div className="mt-4 flex gap-3">
@@ -89,7 +89,7 @@ export default function AiSettingsScreen({ onBack }: AiSettingsScreenProps) {
         <section className="mt-4 rounded-[14px] bg-surface px-4 py-4">
           <p className="text-[13px] font-semibold leading-5 text-text">当前状态</p>
           <p className="mt-2 text-[12px] leading-5 text-text-muted">
-            {hasKey ? "已保存本地 API Key。" : "还没有保存 API Key。"}
+            {hasKey ? "已保存本地 API Key，消息会优先尝试智能识别。" : "还没有保存 API Key，消息会使用本地规则识别。"}
           </p>
           {savedAt && (
             <p className="mt-1 text-[12px] leading-5 text-text-tertiary">
