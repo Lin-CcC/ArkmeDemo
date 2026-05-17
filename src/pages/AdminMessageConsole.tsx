@@ -1,5 +1,9 @@
 import React from "react";
-import { persistPendingArrangementDraft } from "@/data/arrangements";
+import {
+  getInitialArrangements,
+  persistPendingArrangementCompletion,
+  persistPendingArrangementDraft,
+} from "@/data/arrangements";
 import {
   createTestGroup,
   createTestGroupMessage,
@@ -21,7 +25,10 @@ import {
   type TestIdentity,
   type TestMessage,
 } from "@/data/testConversations";
-import { recognizeArrangementFromMessage } from "@/lib/arrangementRecognitionProvider";
+import {
+  recognizeArrangementCompletionFromMessage,
+  recognizeArrangementFromMessage,
+} from "@/lib/arrangementRecognitionProvider";
 import type { ArrangementRecognitionOrigin } from "@/lib/arrangementRecognitionProvider";
 import { formatBubbleTime, formatTimeLabel } from "@/lib/time";
 import { cn } from "@/lib/utils";
@@ -85,6 +92,9 @@ export default function AdminMessageConsole() {
   const [sendingMessage, setSendingMessage] = React.useState(false);
   const [detectedArrangementTitle, setDetectedArrangementTitle] =
     React.useState<string | null>(null);
+  const [detectedAction, setDetectedAction] = React.useState<"arrangement" | "completion" | null>(
+    null
+  );
   const [recognitionStatus, setRecognitionStatus] = React.useState<{
     origin: ArrangementRecognitionOrigin;
     message: string;
@@ -332,16 +342,39 @@ export default function AdminMessageConsole() {
     setSendingMessage(true);
     setMessageText("");
     try {
-      const recognitionResult = await recognizeArrangementFromMessage(nextMessage, {
+      const recognitionContext = {
         conversationTitle:
           messageMode === "group" && activeGroup ? activeGroup.name : activeIdentity.name,
         senderName: activeIdentity.name,
         senderAvatarLabel: activeIdentity.avatarLabel,
+      };
+      const completionResult = await recognizeArrangementCompletionFromMessage(
+        nextMessage,
+        recognitionContext,
+        getInitialArrangements()
+      );
+      if (completionResult.suggestion) {
+        persistPendingArrangementCompletion(completionResult.suggestion);
+        setDetectedArrangementTitle(completionResult.suggestion.arrangementTitle);
+        setDetectedAction("completion");
+        setRecognitionStatus({
+          origin: completionResult.origin,
+          message:
+            completionResult.origin === "ai"
+              ? "已提示确认完成"
+              : completionResult.reason ?? "已提示确认完成",
+        });
+        return;
+      }
+
+      const recognitionResult = await recognizeArrangementFromMessage(nextMessage, {
+        ...recognitionContext,
       });
       const detectedDraft = recognitionResult.draft;
       if (detectedDraft) {
         persistPendingArrangementDraft(detectedDraft);
         setDetectedArrangementTitle(detectedDraft.title);
+        setDetectedAction("arrangement");
         setRecognitionStatus({
           origin: recognitionResult.origin,
           message:
@@ -352,6 +385,7 @@ export default function AdminMessageConsole() {
         return;
       }
       setDetectedArrangementTitle(null);
+      setDetectedAction(null);
       setRecognitionStatus({
         origin: recognitionResult.origin,
         message: recognitionResult.reason ?? "这条消息没有识别出安排",
@@ -510,7 +544,9 @@ export default function AdminMessageConsole() {
               >
                 {detectedArrangementTitle ? (
                   <>
-                    已识别安排「{detectedArrangementTitle}」，请到移动端输入框上方确认。
+                    {detectedAction === "completion"
+                      ? `已提示确认「${detectedArrangementTitle}」可能已完成，请到移动端输入框上方确认。`
+                      : `已识别安排「${detectedArrangementTitle}」，请到移动端输入框上方确认。`}
                     {recognitionStatus && (
                       <span className="ml-1 text-text-muted">({recognitionStatus.message})</span>
                     )}

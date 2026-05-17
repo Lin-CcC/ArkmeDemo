@@ -1,8 +1,10 @@
 import type {
   Arrangement,
   ArrangementAiSettings,
+  ArrangementCompletionSuggestion,
   ArrangementDraft,
   ArrangementPriority,
+  PendingArrangementQueueItem,
   ArrangementReminderOffset,
   ArrangementRepeatRule,
   ArrangementSource,
@@ -13,10 +15,15 @@ import type {
 
 export const arrangementsStorageKey = "arkme-demo.arrangements";
 export const pendingArrangementDraftStorageKey = "arkme-demo.pendingArrangementDraft";
+export const pendingArrangementCompletionStorageKey = "arkme-demo.pendingArrangementCompletion";
+export const pendingArrangementQueueStorageKey = "arkme-demo.pendingArrangementQueue";
 export const arrangementAiSettingsStorageKey = "arkme-demo.arrangementAiSettings";
 export const arrangementTagsStorageKey = "arkme-demo.arrangementTags";
 export const arrangementsStorageEvent = "arkme-demo:arrangements-updated";
 export const pendingArrangementStorageEvent = "arkme-demo:pending-arrangement-updated";
+export const pendingArrangementCompletionStorageEvent =
+  "arkme-demo:pending-arrangement-completion-updated";
+export const pendingArrangementQueueStorageEvent = "arkme-demo:pending-arrangement-queue-updated";
 export const arrangementTagsStorageEvent = "arkme-demo:arrangement-tags-updated";
 
 export const defaultArrangementTags: ArrangementTag[] = [
@@ -203,6 +210,88 @@ function normalizeSource(value: unknown): ArrangementSource | undefined {
     senderAvatarLabel: normalizeText(source.senderAvatarLabel) || undefined,
     sentAt: normalizeTimestamp(source.sentAt, Date.now()),
   };
+}
+
+function normalizeCompletionSuggestion(value: unknown): ArrangementCompletionSuggestion | null {
+  if (!value || typeof value !== "object") return null;
+
+  const suggestion = value as Partial<ArrangementCompletionSuggestion>;
+  const arrangementId = normalizeText(suggestion.arrangementId);
+  const arrangementTitle = normalizeText(suggestion.arrangementTitle);
+  const source = normalizeSource(suggestion.source);
+  if (!arrangementId || !arrangementTitle || !source) return null;
+
+  return {
+    id: normalizeText(suggestion.id) || `completion-${source.conversationId}-${source.messageId}`,
+    arrangementId,
+    arrangementTitle,
+    source,
+    reason: normalizeText(suggestion.reason) || undefined,
+    origin: suggestion.origin === "ai" ? "ai" : suggestion.origin === "local" ? "local" : undefined,
+    createdAt: normalizeTimestamp(suggestion.createdAt, Date.now()),
+  };
+}
+
+function normalizePendingQueueItem(value: unknown): PendingArrangementQueueItem | null {
+  if (!value || typeof value !== "object") return null;
+
+  const item = value as Partial<PendingArrangementQueueItem>;
+  const createdAt = normalizeTimestamp(item.createdAt, Date.now());
+  if (item.kind === "completion") {
+    const completion = normalizeCompletionSuggestion(item.completion);
+    if (!completion) return null;
+    return {
+      id: normalizeText(item.id) || completion.id,
+      kind: "completion",
+      completion,
+      createdAt,
+    };
+  }
+
+  if (item.kind === "draft") {
+    const draft = normalizeArrangementDraft(item.draft);
+    if (!draft) return null;
+    const source = draft.source;
+    return {
+      id:
+        normalizeText(item.id) ||
+        (source ? `draft-${source.conversationId}-${source.messageId}` : `draft-${createdAt}`),
+      kind: "draft",
+      draft,
+      createdAt,
+    };
+  }
+
+  return null;
+}
+
+function getPendingQueueItemKey(item: PendingArrangementQueueItem) {
+  if (item.kind === "completion") {
+    const { source } = item.completion;
+    return `completion:${item.completion.arrangementId}:${source.conversationId}:${source.messageId}`;
+  }
+
+  const source = item.draft.source;
+  return source ? `draft:${source.conversationId}:${source.messageId}` : `draft:${item.id}`;
+}
+
+function normalizePendingQueue(value: unknown) {
+  if (!Array.isArray(value)) return [];
+
+  const seen = new Set<string>();
+  return value
+    .map(normalizePendingQueueItem)
+    .filter((item): item is PendingArrangementQueueItem => Boolean(item))
+    .filter((item) => {
+      const key = getPendingQueueItemKey(item);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => {
+      if (a.kind !== b.kind) return a.kind === "completion" ? -1 : 1;
+      return a.createdAt - b.createdAt;
+    });
 }
 
 function getNormalizedSources(value: Partial<ArrangementDraft>) {
@@ -422,18 +511,107 @@ export function persistArrangements(arrangements: Arrangement[]) {
 }
 
 export function getInitialPendingArrangementDraft() {
-  return normalizeArrangementDraft(readJsonValue(pendingArrangementDraftStorageKey));
+  return getInitialPendingArrangementQueue().find((item) => item.kind === "draft")?.draft ?? null;
 }
 
 export function persistPendingArrangementDraft(draft: ArrangementDraft) {
-  writeJsonValue(pendingArrangementDraftStorageKey, draft);
+  appendPendingArrangementDraft(draft);
+}
+
+export function getInitialPendingArrangementQueue() {
+  const queue = normalizePendingQueue(readJsonValue(pendingArrangementQueueStorageKey));
+  const legacyCompletion = normalizeCompletionSuggestion(
+    readJsonValue(pendingArrangementCompletionStorageKey)
+  );
+  const legacyDraft = normalizeArrangementDraft(readJsonValue(pendingArrangementDraftStorageKey));
+  const legacyItems: PendingArrangementQueueItem[] = [
+    ...(legacyCompletion
+      ? [
+          {
+            id: legacyCompletion.id,
+            kind: "completion" as const,
+            completion: legacyCompletion,
+            createdAt: legacyCompletion.createdAt,
+          },
+        ]
+      : []),
+    ...(legacyDraft
+      ? [
+          {
+            id: legacyDraft.source
+              ? `draft-${legacyDraft.source.conversationId}-${legacyDraft.source.messageId}`
+              : `draft-${Date.now()}`,
+            kind: "draft" as const,
+            draft: legacyDraft,
+            createdAt: legacyDraft.source?.sentAt ?? Date.now(),
+          },
+        ]
+      : []),
+  ];
+
+  return normalizePendingQueue([...legacyItems, ...queue]);
+}
+
+export function persistPendingArrangementQueue(queue: PendingArrangementQueueItem[]) {
+  if (typeof window !== "undefined") {
+    window.localStorage.removeItem(pendingArrangementDraftStorageKey);
+    window.localStorage.removeItem(pendingArrangementCompletionStorageKey);
+  }
+  writeJsonValue(pendingArrangementQueueStorageKey, normalizePendingQueue(queue));
+  notify(pendingArrangementQueueStorageEvent);
   notify(pendingArrangementStorageEvent);
+  notify(pendingArrangementCompletionStorageEvent);
+}
+
+export function appendPendingArrangementDraft(draft: ArrangementDraft) {
+  const normalizedDraft = normalizeArrangementDraft(draft);
+  if (!normalizedDraft) return;
+  const source = normalizedDraft.source;
+  const item: PendingArrangementQueueItem = {
+    id: source ? `draft-${source.conversationId}-${source.messageId}` : `draft-${Date.now()}`,
+    kind: "draft",
+    draft: normalizedDraft,
+    createdAt: source?.sentAt ?? Date.now(),
+  };
+  persistPendingArrangementQueue([...getInitialPendingArrangementQueue(), item]);
+}
+
+export function appendPendingArrangementCompletion(suggestion: ArrangementCompletionSuggestion) {
+  const normalizedSuggestion = normalizeCompletionSuggestion(suggestion);
+  if (!normalizedSuggestion) return;
+  persistPendingArrangementQueue([
+    ...getInitialPendingArrangementQueue(),
+    {
+      id: normalizedSuggestion.id,
+      kind: "completion",
+      completion: normalizedSuggestion,
+      createdAt: normalizedSuggestion.createdAt,
+    },
+  ]);
+}
+
+export function removePendingArrangementQueueItem(itemId: string) {
+  persistPendingArrangementQueue(
+    getInitialPendingArrangementQueue().filter((item) => item.id !== itemId)
+  );
+}
+
+export function clearPendingArrangementQueue() {
+  if (typeof window === "undefined") return;
+
+  window.localStorage.removeItem(pendingArrangementQueueStorageKey);
+  notify(pendingArrangementQueueStorageEvent);
+  notify(pendingArrangementStorageEvent);
+  notify(pendingArrangementCompletionStorageEvent);
 }
 
 export function clearPendingArrangementDraft() {
   if (typeof window === "undefined") return;
 
   window.localStorage.removeItem(pendingArrangementDraftStorageKey);
+  persistPendingArrangementQueue(
+    getInitialPendingArrangementQueue().filter((item) => item.kind !== "draft")
+  );
   notify(pendingArrangementStorageEvent);
 }
 
@@ -458,6 +636,27 @@ export function getInitialArrangementAiSettings(): ArrangementAiSettings {
         ? settings.updatedAt
         : null,
   };
+}
+
+export function getInitialPendingArrangementCompletion() {
+  return (
+    getInitialPendingArrangementQueue().find((item) => item.kind === "completion")?.completion ??
+    null
+  );
+}
+
+export function persistPendingArrangementCompletion(suggestion: ArrangementCompletionSuggestion) {
+  appendPendingArrangementCompletion(suggestion);
+}
+
+export function clearPendingArrangementCompletion() {
+  if (typeof window === "undefined") return;
+
+  window.localStorage.removeItem(pendingArrangementCompletionStorageKey);
+  persistPendingArrangementQueue(
+    getInitialPendingArrangementQueue().filter((item) => item.kind !== "completion")
+  );
+  notify(pendingArrangementCompletionStorageEvent);
 }
 
 export function persistArrangementAiSettings(settings: {
@@ -516,6 +715,24 @@ export function mergeDraftIntoArrangement(
     source: sources[0],
     sources,
     note: mergeArrangementNote(arrangement.note, draft.note),
+    updatedAt: Date.now(),
+  };
+}
+
+export function completeArrangementWithSource(
+  arrangement: Arrangement,
+  source: ArrangementSource
+): Arrangement {
+  const sources = mergeArrangementSources([
+    ...(arrangement.source ? [arrangement.source] : []),
+    ...(arrangement.sources ?? []),
+    source,
+  ]);
+  return {
+    ...arrangement,
+    status: "completed",
+    source: sources[0],
+    sources,
     updatedAt: Date.now(),
   };
 }

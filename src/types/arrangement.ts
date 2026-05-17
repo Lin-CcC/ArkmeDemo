@@ -92,6 +92,30 @@ export type ArrangementDraft = {
   sources?: ArrangementSource[];
 };
 
+export type ArrangementCompletionSuggestion = {
+  id: string;
+  arrangementId: string;
+  arrangementTitle: string;
+  source: ArrangementSource;
+  reason?: string;
+  origin?: "ai" | "local";
+  createdAt: number;
+};
+
+export type PendingArrangementQueueItem =
+  | {
+      id: string;
+      kind: "completion";
+      completion: ArrangementCompletionSuggestion;
+      createdAt: number;
+    }
+  | {
+      id: string;
+      kind: "draft";
+      draft: ArrangementDraft;
+      createdAt: number;
+    };
+
 export type ArrangementAiSettings = {
   apiKey: string;
   endpointUrl?: string;
