@@ -133,6 +133,28 @@ type ArrangementEditorState =
     }
   | null;
 
+type ArrangementActionToast =
+  | {
+      kind: "status";
+      arrangementId: string;
+      title: string;
+      previousStatus: Arrangement["status"];
+      nextStatus: Arrangement["status"];
+    }
+  | {
+      kind: "delete";
+      arrangement: Arrangement;
+      index: number;
+    }
+  | null;
+
+type ArrangementMoveTarget = {
+  beforeId?: string;
+  status?: Arrangement["status"];
+  priority?: Arrangement["priority"];
+  dateKey?: string | null;
+};
+
 const quickSearchTypes: QuickSearchType[] = [
   "image",
   "audio",
@@ -370,7 +392,7 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
   const [sendToSelfTargetUid, setSendToSelfTargetUid] = React.useState<string | null>(null);
   const [activeTestIdentityId, setActiveTestIdentityId] = React.useState<string | null>(null);
   const [testConversationTargetUid, setTestConversationTargetUid] = React.useState<string | null>(null);
-  const [settingsView, setSettingsView] = React.useState<null | "settings" | "appearance" | "about">(
+  const [settingsView, setSettingsView] = React.useState<null | "settings" | "appearance" | "ai" | "about">(
     null
   );
   const [searchQuery, setSearchQuery] = React.useState("");
@@ -396,7 +418,8 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
   );
   const [arrangementEditor, setArrangementEditor] =
     React.useState<ArrangementEditorState>(null);
-  const [showArrangementAiSettings, setShowArrangementAiSettings] = React.useState(false);
+  const [arrangementActionToast, setArrangementActionToast] =
+    React.useState<ArrangementActionToast>(null);
   const initializedBrowserNotificationMessagesRef = React.useRef(false);
   const browserNotifiedMessageIdsRef = React.useRef<Set<string>>(new Set());
 
@@ -1224,31 +1247,139 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
     [arrangementEditor, onNavigate, updateArrangements]
   );
 
-  const completeArrangement = React.useCallback(
+  const cycleArrangementStatus = React.useCallback(
     (arrangement: Arrangement) => {
+      const nextStatus =
+        arrangement.status === "active"
+          ? "completed"
+          : arrangement.status === "completed"
+            ? "abandoned"
+            : "active";
       updateArrangements((current) =>
         current.map((item) =>
           item.id === arrangement.id
-            ? { ...item, status: "completed", updatedAt: Date.now() }
+            ? { ...item, status: nextStatus, updatedAt: Date.now() }
             : item
         )
+      );
+      setArrangementActionToast({
+        kind: "status",
+        arrangementId: arrangement.id,
+        title: arrangement.title,
+        previousStatus: arrangement.status,
+        nextStatus,
+      });
+    },
+    [updateArrangements]
+  );
+
+  const deleteArrangement = React.useCallback(
+    (arrangement: Arrangement) => {
+      let deletedIndex = 0;
+      updateArrangements((current) => {
+        deletedIndex = current.findIndex((item) => item.id === arrangement.id);
+        return current.filter((item) => item.id !== arrangement.id);
+      });
+      setArrangementActionToast({
+        kind: "delete",
+        arrangement,
+        index: Math.max(0, deletedIndex),
+      });
+      setArrangementEditor((current) =>
+        current?.targetId === arrangement.id ? null : current
       );
     },
     [updateArrangements]
   );
 
-  const postponeArrangement = React.useCallback(
-    (arrangement: Arrangement) => {
-      updateArrangements((current) =>
-        current.map((item) =>
-          item.id === arrangement.id
-            ? { ...item, status: "abandoned", updatedAt: Date.now() }
-            : item
-        )
-      );
+  const moveArrangement = React.useCallback(
+    (arrangement: Arrangement, target: ArrangementMoveTarget) => {
+      updateArrangements((current) => {
+        const existing = current.find((item) => item.id === arrangement.id);
+        if (!existing) return current;
+
+        const moved: Arrangement = {
+          ...existing,
+          status: target.status ?? existing.status,
+          priority: target.priority ?? existing.priority,
+          updatedAt: Date.now(),
+        };
+
+        if ("dateKey" in target) {
+          if (target.dateKey) {
+            moved.dateText = target.dateKey;
+            if (moved.timeMode === "none") {
+              moved.timeMode = "all_day";
+            }
+          } else {
+            moved.dateText = undefined;
+            moved.timeText = undefined;
+            moved.startText = undefined;
+            moved.endText = undefined;
+            moved.pointTime = undefined;
+            moved.startTime = undefined;
+            moved.endTime = undefined;
+            moved.timeMode = "none";
+            moved.reminderEnabled = false;
+          }
+        }
+
+        const next = current.filter((item) => item.id !== arrangement.id);
+        const beforeIndex =
+          target.beforeId && target.beforeId !== arrangement.id
+            ? next.findIndex((item) => item.id === target.beforeId)
+            : -1;
+
+        if (beforeIndex >= 0) {
+          next.splice(beforeIndex, 0, moved);
+          return next;
+        }
+
+        const groupIndex = next.findIndex((item) =>
+          arrangementMatchesMoveTarget(item, target)
+        );
+        if (groupIndex >= 0) {
+          next.splice(groupIndex, 0, moved);
+          return next;
+        }
+
+        return [moved, ...next];
+      });
     },
     [updateArrangements]
   );
+
+  const undoArrangementAction = React.useCallback(() => {
+    const toast = arrangementActionToast;
+    if (!toast) return;
+
+    if (toast.kind === "status") {
+      updateArrangements((current) =>
+        current.map((item) =>
+          item.id === toast.arrangementId
+            ? { ...item, status: toast.previousStatus, updatedAt: Date.now() }
+            : item
+        )
+      );
+    } else {
+      updateArrangements((current) => {
+        if (current.some((item) => item.id === toast.arrangement.id)) return current;
+        const next = [...current];
+        next.splice(Math.min(toast.index, next.length), 0, toast.arrangement);
+        return next;
+      });
+    }
+
+    setArrangementActionToast(null);
+  }, [arrangementActionToast, updateArrangements]);
+
+  React.useEffect(() => {
+    if (!arrangementActionToast) return;
+    const timer = window.setTimeout(() => {
+      setArrangementActionToast(null);
+    }, 2200);
+    return () => window.clearTimeout(timer);
+  }, [arrangementActionToast]);
 
   const openPendingArrangementEditor = React.useCallback(() => {
     if (!pendingArrangementDraft) return;
@@ -1298,6 +1429,10 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
       return <AppearanceStyleScreen onBack={() => setSettingsView("settings")} />;
     }
 
+    if (settingsView === "ai") {
+      return <AiSettingsScreen onBack={() => setSettingsView("settings")} />;
+    }
+
     if (settingsView === "about") {
       return <AboutScreen onBack={() => setSettingsView(null)} />;
     }
@@ -1307,12 +1442,9 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
         <SettingsScreen
           onBack={() => setSettingsView(null)}
           onOpenAppearance={() => setSettingsView("appearance")}
+          onOpenAiSettings={() => setSettingsView("ai")}
         />
       );
-    }
-
-    if (showArrangementAiSettings) {
-      return <AiSettingsScreen onBack={() => setShowArrangementAiSettings(false)} />;
     }
 
     if (showAiConversation) {
@@ -1390,11 +1522,14 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
         <ArrangementsPage
           arrangements={arrangements}
           arrangementTags={arrangementTags}
+          actionToast={arrangementActionToast}
           onCreate={openCreateArrangement}
           onOpen={openArrangementDetail}
-          onComplete={completeArrangement}
-          onPostpone={postponeArrangement}
-          onOpenAiSettings={() => setShowArrangementAiSettings(true)}
+          onCycleStatus={cycleArrangementStatus}
+          onDelete={deleteArrangement}
+          onMove={moveArrangement}
+          onUndoAction={undoArrangementAction}
+          onDismissActionToast={() => setArrangementActionToast(null)}
         />
       );
     }
@@ -1438,7 +1573,7 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
       mainPane={
         <div className="relative flex min-h-0 flex-1 flex-col">
           <main className="min-h-0 flex-1 overflow-hidden">{renderMainContent()}</main>
-          {!recordDetail && !showSearch && !showAnswerGuide && !showAiConversation && !showSendToSelf && !showTestConversation && !settingsView && !showArrangementAiSettings && (
+          {!recordDetail && !showSearch && !showAnswerGuide && !showAiConversation && !showSendToSelf && !showTestConversation && !settingsView && (
             <MobileBottomNavigation currentPage={currentPage} onNavigate={onNavigate} />
           )}
           <MobileSideDrawer
@@ -1479,6 +1614,25 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
       }
     />
   );
+}
+
+function arrangementMatchesMoveTarget(
+  arrangement: Arrangement,
+  target: ArrangementMoveTarget
+) {
+  if (target.status && arrangement.status !== target.status) return false;
+  if (target.priority && arrangement.priority !== target.priority) return false;
+  if ("dateKey" in target) {
+    const dateKey = getArrangementDateKeyForMove(arrangement);
+    if ((target.dateKey ?? null) !== (dateKey ?? null)) return false;
+  }
+  return true;
+}
+
+function getArrangementDateKeyForMove(arrangement: Arrangement) {
+  const dateText = arrangement.dateText?.trim();
+  if (dateText && /^\d{4}-\d{2}-\d{2}$/.test(dateText)) return dateText;
+  return null;
 }
 
 function SearchScreen({
@@ -3349,9 +3503,11 @@ function MineActionCard({
 function SettingsScreen({
   onBack,
   onOpenAppearance,
+  onOpenAiSettings,
 }: {
   onBack: () => void;
   onOpenAppearance: () => void;
+  onOpenAiSettings: () => void;
 }) {
   const { localeCode, resolvedLocale, t } = usePreferences();
   const [showLanguageSheet, setShowLanguageSheet] = React.useState(false);
@@ -3366,6 +3522,11 @@ function SettingsScreen({
             title={t("settings.appearance")}
             description={t("settings.appearanceDesc")}
             onClick={onOpenAppearance}
+          />
+          <SettingsListItem
+            title={t("settings.ai")}
+            description={t("settings.aiDesc")}
+            onClick={onOpenAiSettings}
           />
           <SettingsListItem
             title={t("settings.language")}
