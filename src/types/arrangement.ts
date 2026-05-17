@@ -62,6 +62,7 @@ export type Arrangement = {
   placeText?: string;
   note?: string;
   source?: ArrangementSource;
+  sources?: ArrangementSource[];
   createdAt: number;
   updatedAt: number;
 };
@@ -88,9 +89,12 @@ export type ArrangementDraft = {
   placeText?: string;
   note?: string;
   source?: ArrangementSource;
+  sources?: ArrangementSource[];
 };
 
 export type ArrangementAiSettings = {
   apiKey: string;
+  endpointUrl?: string;
+  model?: string;
   updatedAt: number | null;
 };

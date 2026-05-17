@@ -29,6 +29,7 @@ type ArrangementEditorSheetProps = {
   mode: ArrangementEditorMode;
   initialValue: Arrangement | ArrangementDraft | null;
   arrangementTags: ArrangementTag[];
+  similarArrangement?: Arrangement | null;
   onCreateTag: (name: string, color: string) => ArrangementTag;
   onClose: () => void;
   onOpenSource?: (source: ArrangementSource) => void;
@@ -104,6 +105,7 @@ export default function ArrangementEditorSheet({
   mode,
   initialValue,
   arrangementTags,
+  similarArrangement,
   onCreateTag,
   onClose,
   onOpenSource,
@@ -114,6 +116,7 @@ export default function ArrangementEditorSheet({
   const [creatingTag, setCreatingTag] = React.useState(false);
   const [newTagName, setNewTagName] = React.useState("");
   const [newTagColor, setNewTagColor] = React.useState(recommendedColors[0]);
+  const [sourceExpanded, setSourceExpanded] = React.useState(false);
 
   React.useEffect(() => {
     setDraft(normalizeInitialValue(initialValue, arrangementTags));
@@ -121,6 +124,7 @@ export default function ArrangementEditorSheet({
     setCreatingTag(false);
     setNewTagName("");
     setNewTagColor(recommendedColors[0]);
+    setSourceExpanded(false);
   }, [arrangementTags, initialValue, open]);
 
   if (!open) return null;
@@ -132,6 +136,8 @@ export default function ArrangementEditorSheet({
   const repeatRule = draft.repeatRule ?? emptyRepeatRule;
   const timeEnabled = Boolean(draft.timeMode && draft.timeMode !== "none");
   const reminderEnabled = Boolean(draft.reminderEnabled);
+  const arrangementSources = getArrangementSources(draft);
+  const visibleSources = sourceExpanded ? arrangementSources : arrangementSources.slice(0, 2);
 
   const updateDraft = (patch: Partial<ArrangementDraft>) => {
     setDraft((current) => ({ ...current, ...patch }));
@@ -304,19 +310,41 @@ export default function ArrangementEditorSheet({
             </SettingRow>
           </section>
 
-          {draft.source && (
+          {mode === "confirm" && similarArrangement && (
+            <p className="rounded-[12px] bg-[#FFF8E5] px-3 py-2 text-[12px] leading-5 text-[#9A5A00]">
+              已发现相关安排，回到卡片右上角可处理合并或新建。
+            </p>
+          )}
+
+          {arrangementSources.length > 0 && (
             <section className="rounded-[16px] border border-border bg-surface px-3 py-3">
-              <button
-                type="button"
-                onClick={() => onOpenSource?.(draft.source!)}
-                disabled={!onOpenSource}
-                className="block w-full text-left disabled:cursor-default"
-              >
+              <div className="flex items-center justify-between gap-3">
                 <span className="block text-[12px] font-semibold leading-5 text-text">来源消息</span>
-                <span className="mt-0.5 block truncate text-[12px] leading-5 text-text-muted">
-                  来自 {draft.source.senderName}：{draft.source.messageText}
-                </span>
-              </button>
+                {arrangementSources.length > 2 && (
+                  <button
+                    type="button"
+                    onClick={() => setSourceExpanded((expanded) => !expanded)}
+                    className="text-[12px] font-medium leading-5 text-text-muted"
+                  >
+                    {sourceExpanded ? "收起" : `查看全部 ${arrangementSources.length} 条`}
+                  </button>
+                )}
+              </div>
+              <div className="mt-1 space-y-1.5">
+                {visibleSources.map((source, index) => (
+                  <button
+                    key={`${source.conversationId}-${source.messageId}`}
+                    type="button"
+                    onClick={() => onOpenSource?.(source)}
+                    disabled={!onOpenSource}
+                    className="block w-full rounded-[10px] px-0 py-1 text-left disabled:cursor-default"
+                  >
+                    <span className="block truncate text-[12px] leading-5 text-text-muted">
+                      {index + 1}. 来自 {source.senderName}：{source.messageText}
+                    </span>
+                  </button>
+                ))}
+              </div>
             </section>
           )}
 
@@ -1135,7 +1163,21 @@ function normalizeInitialValue(
     tags: value.tags,
     note: value.note,
     source: value.source,
+    sources: value.sources,
   };
+}
+
+function getArrangementSources(value: Arrangement | ArrangementDraft) {
+  const sources = [
+    ...(value.source ? [value.source] : []),
+    ...(value.sources ?? []),
+  ];
+  const byMessage = new Map<string, ArrangementSource>();
+  sources.forEach((source) => {
+    const key = `${source.conversationId}:${source.messageId}`;
+    if (!byMessage.has(key)) byMessage.set(key, source);
+  });
+  return Array.from(byMessage.values());
 }
 
 function inferTimeMode(value: Arrangement | ArrangementDraft): ArrangementTimeMode {
