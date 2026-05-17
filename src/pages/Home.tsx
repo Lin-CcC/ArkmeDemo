@@ -8,22 +8,25 @@ import RecordFullDetailScreen from "@/components/RecordFullDetailScreen";
 import AiSettingsScreen from "@/components/arrangements/AiSettingsScreen";
 import ArrangementEditorSheet from "@/components/arrangements/ArrangementEditorSheet";
 import ArrangementsPage from "@/components/arrangements/ArrangementsPage";
+import CompletionSuggestionCard from "@/components/arrangements/CompletionSuggestionCard";
 import PendingArrangementCard from "@/components/arrangements/PendingArrangementCard";
 import Records from "@/pages/Records";
 import {
   arrangementTagsStorageEvent,
   arrangementTagsStorageKey,
   arrangementsStorageEvent,
-  clearPendingArrangementDraft,
+  completeArrangementWithSource,
   createArrangementFromDraft,
   getInitialArrangements,
   getInitialArrangementTags,
-  getInitialPendingArrangementDraft,
+  getInitialPendingArrangementQueue,
   mergeDraftIntoArrangement,
-  pendingArrangementDraftStorageKey,
+  pendingArrangementQueueStorageEvent,
+  pendingArrangementQueueStorageKey,
   pendingArrangementStorageEvent,
   persistArrangementTags,
   persistArrangements,
+  removePendingArrangementQueueItem,
 } from "@/data/arrangements";
 import { findSimilarArrangement } from "@/lib/arrangementSimilarity";
 import { aiConversationLogEntries } from "@/data/aiConversationLog";
@@ -66,9 +69,11 @@ import {
 import type { PageType } from "@/App";
 import type {
   Arrangement,
+  ArrangementCompletionSuggestion,
   ArrangementDraft,
   ArrangementSource,
   ArrangementTag,
+  PendingArrangementQueueItem,
 } from "@/types/arrangement";
 import type { RecordItem, RecordReference, RecordSourceConversation } from "@/types/record";
 
@@ -428,9 +433,13 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
     React.useState<TestReadState>(getInitialTestReadState);
   const [arrangements, setArrangements] = React.useState(getInitialArrangements);
   const [arrangementTags, setArrangementTags] = React.useState(getInitialArrangementTags);
-  const [pendingArrangementDraft, setPendingArrangementDraft] = React.useState(
-    getInitialPendingArrangementDraft
-  );
+  const [pendingArrangementQueue, setPendingArrangementQueue] =
+    React.useState<PendingArrangementQueueItem[]>(getInitialPendingArrangementQueue);
+  const activePendingItem = pendingArrangementQueue[0] ?? null;
+  const pendingArrangementDraft =
+    activePendingItem?.kind === "draft" ? activePendingItem.draft : null;
+  const pendingCompletionSuggestion =
+    activePendingItem?.kind === "completion" ? activePendingItem.completion : null;
   const [arrangementEditor, setArrangementEditor] =
     React.useState<ArrangementEditorState>(null);
   const [arrangementActionToast, setArrangementActionToast] =
@@ -491,27 +500,42 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
     const refreshArrangementTags = () => {
       setArrangementTags(getInitialArrangementTags());
     };
-    const refreshPendingArrangement = () => {
-      setPendingArrangementDraft(getInitialPendingArrangementDraft());
+    const refreshPendingSignals = () => {
+      setPendingArrangementQueue(getInitialPendingArrangementQueue());
     };
     const handleStorage = (event: StorageEvent) => {
-      if (event.key === pendingArrangementDraftStorageKey) {
-        refreshPendingArrangement();
+      if (event.key === pendingArrangementQueueStorageKey) {
+        refreshPendingSignals();
       }
       if (event.key === arrangementTagsStorageKey) {
         refreshArrangementTags();
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        refreshPendingSignals();
       }
     };
 
     window.addEventListener("storage", handleStorage);
     window.addEventListener(arrangementsStorageEvent, refreshArrangements);
     window.addEventListener(arrangementTagsStorageEvent, refreshArrangementTags);
-    window.addEventListener(pendingArrangementStorageEvent, refreshPendingArrangement);
+    window.addEventListener(pendingArrangementStorageEvent, refreshPendingSignals);
+    window.addEventListener(pendingArrangementQueueStorageEvent, refreshPendingSignals);
+    window.addEventListener("focus", refreshPendingSignals);
+    window.addEventListener("pageshow", refreshPendingSignals);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    const pendingSyncTimer = window.setInterval(refreshPendingSignals, 1000);
     return () => {
+      window.clearInterval(pendingSyncTimer);
       window.removeEventListener("storage", handleStorage);
       window.removeEventListener(arrangementsStorageEvent, refreshArrangements);
       window.removeEventListener(arrangementTagsStorageEvent, refreshArrangementTags);
-      window.removeEventListener(pendingArrangementStorageEvent, refreshPendingArrangement);
+      window.removeEventListener(pendingArrangementStorageEvent, refreshPendingSignals);
+      window.removeEventListener(pendingArrangementQueueStorageEvent, refreshPendingSignals);
+      window.removeEventListener("focus", refreshPendingSignals);
+      window.removeEventListener("pageshow", refreshPendingSignals);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, []);
 
@@ -1265,13 +1289,15 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
       }
 
       if (editor.mode === "confirm") {
-        clearPendingArrangementDraft();
-        setPendingArrangementDraft(null);
+        if (activePendingItem?.kind === "draft") {
+          removePendingArrangementQueueItem(activePendingItem.id);
+          setPendingArrangementQueue(getInitialPendingArrangementQueue());
+        }
       }
       setArrangementEditor(null);
       onNavigate("arrangements");
     },
-    [arrangementEditor, onNavigate, updateArrangements]
+    [activePendingItem, arrangementEditor, onNavigate, updateArrangements]
   );
 
   const cycleArrangementStatus = React.useCallback(
@@ -1479,11 +1505,13 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
     if (!draft) return;
     const nextArrangement = createArrangementFromDraft(draft);
     updateArrangements((current) => [nextArrangement, ...current]);
-    clearPendingArrangementDraft();
-    setPendingArrangementDraft(null);
+    if (activePendingItem?.kind === "draft") {
+      removePendingArrangementQueueItem(activePendingItem.id);
+      setPendingArrangementQueue(getInitialPendingArrangementQueue());
+    }
     setArrangementEditor(null);
     onNavigate("arrangements");
-  }, [onNavigate, pendingArrangementDraft, updateArrangements]);
+  }, [activePendingItem, onNavigate, pendingArrangementDraft, updateArrangements]);
 
   const confirmPendingArrangement = React.useCallback(() => {
     createPendingArrangement();
@@ -1497,20 +1525,24 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
       current.map((arrangement) =>
         arrangement.id === similarPendingArrangement.arrangement.id
           ? mergeDraftIntoArrangement(arrangement, draft)
-          : arrangement
+        : arrangement
       )
     );
-    clearPendingArrangementDraft();
-    setPendingArrangementDraft(null);
+    if (activePendingItem?.kind === "draft") {
+      removePendingArrangementQueueItem(activePendingItem.id);
+      setPendingArrangementQueue(getInitialPendingArrangementQueue());
+    }
     setArrangementEditor(null);
     onNavigate("arrangements");
-  }, [onNavigate, pendingArrangementDraft, similarPendingArrangement, updateArrangements]);
+  }, [activePendingItem, onNavigate, pendingArrangementDraft, similarPendingArrangement, updateArrangements]);
 
   const dismissPendingArrangement = React.useCallback(() => {
-    clearPendingArrangementDraft();
-    setPendingArrangementDraft(null);
+    if (activePendingItem?.kind === "draft") {
+      removePendingArrangementQueueItem(activePendingItem.id);
+      setPendingArrangementQueue(getInitialPendingArrangementQueue());
+    }
     setArrangementEditor(null);
-  }, []);
+  }, [activePendingItem]);
 
   const closeConversationOverlays = React.useCallback(() => {
     setShowMenu(false);
@@ -1531,14 +1563,16 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
 
       const nextArrangement = createArrangementFromDraft(draft);
       updateArrangements((current) => [nextArrangement, ...current]);
-      clearPendingArrangementDraft();
-      setPendingArrangementDraft(null);
+      if (activePendingItem?.kind === "draft") {
+        removePendingArrangementQueueItem(activePendingItem.id);
+        setPendingArrangementQueue(getInitialPendingArrangementQueue());
+      }
       setArrangementEditor(null);
       closeConversationOverlays();
       setHighlightedArrangementId(nextArrangement.id);
       onNavigate("arrangements");
     },
-    [closeConversationOverlays, onNavigate, pendingArrangementDraft, updateArrangements]
+    [activePendingItem, closeConversationOverlays, onNavigate, pendingArrangementDraft, updateArrangements]
   );
 
   const jumpToArrangement = React.useCallback(
@@ -1564,6 +1598,51 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
     [closeConversationOverlays, mergePendingArrangement, onNavigate, similarPendingArrangement]
   );
 
+  const dismissCompletionSuggestion = React.useCallback(() => {
+    if (activePendingItem?.kind === "completion") {
+      removePendingArrangementQueueItem(activePendingItem.id);
+      setPendingArrangementQueue(getInitialPendingArrangementQueue());
+    }
+  }, [activePendingItem]);
+
+  const jumpToCompletionArrangement = React.useCallback(
+    (suggestion: ArrangementCompletionSuggestion) => {
+      closeConversationOverlays();
+      setArrangementEditor(null);
+      setHighlightedArrangementId(suggestion.arrangementId);
+      onNavigate("arrangements");
+    },
+    [closeConversationOverlays, onNavigate]
+  );
+
+  const confirmCompletionSuggestion = React.useCallback(
+    (suggestion: ArrangementCompletionSuggestion) => {
+      let previousStatus: Arrangement["status"] | null = null;
+      updateArrangements((current) =>
+        current.map((arrangement) => {
+          if (arrangement.id !== suggestion.arrangementId) return arrangement;
+          previousStatus = arrangement.status;
+          return completeArrangementWithSource(arrangement, suggestion.source);
+        })
+      );
+      if (previousStatus) {
+        setArrangementActionToast({
+          kind: "status",
+          arrangementId: suggestion.arrangementId,
+          title: suggestion.arrangementTitle,
+          previousStatus,
+          nextStatus: "completed",
+        });
+      }
+      dismissCompletionSuggestion();
+      closeConversationOverlays();
+      setArrangementEditor(null);
+      setHighlightedArrangementId(suggestion.arrangementId);
+      onNavigate("arrangements");
+    },
+    [closeConversationOverlays, dismissCompletionSuggestion, onNavigate, updateArrangements]
+  );
+
   const openArrangementSource = React.useCallback(
     (source: ArrangementSource) => {
       const returnContext: ConversationReturnContext = {
@@ -1580,22 +1659,26 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
     [openTestConversation, recordDetail, recordSnapshot]
   );
 
-  const pendingArrangementOverlay = pendingArrangementDraft ? (
-    <PendingArrangementCard
-      draft={pendingArrangementDraft}
-      arrangementTags={arrangementTags}
-      similarArrangement={similarPendingArrangement?.arrangement ?? null}
-      onOpenEditor={openPendingArrangementEditor}
-      onOpenSource={openArrangementSource}
-      onOpenSimilarArrangement={jumpToArrangement}
-      onMergeSimilar={mergePendingArrangementAndHighlight}
-      onCreateAnyway={createPendingArrangementAndHighlight}
-      onConfirm={confirmPendingArrangement}
-      onDismiss={dismissPendingArrangement}
-    />
-  ) : null;
+  const pendingArrangementOverlay = pendingArrangementDraft
+      ? (
+          <PendingArrangementCard
+            draft={pendingArrangementDraft}
+            arrangementTags={arrangementTags}
+            similarArrangement={similarPendingArrangement?.arrangement ?? null}
+            onOpenEditor={openPendingArrangementEditor}
+            onOpenSource={openArrangementSource}
+            onOpenSimilarArrangement={jumpToArrangement}
+            onMergeSimilar={mergePendingArrangementAndHighlight}
+            onCreateAnyway={createPendingArrangementAndHighlight}
+            onConfirm={confirmPendingArrangement}
+            onDismiss={dismissPendingArrangement}
+          />
+        )
+      : null;
   const activeSourcePendingArrangementDraft =
-    pendingArrangementDraft?.source?.conversationId === activeTestConversationSummary?.conversationId
+    pendingCompletionSuggestion
+      ? null
+      : pendingArrangementDraft?.source?.conversationId === activeTestConversationSummary?.conversationId
       ? pendingArrangementDraft
       : null;
   const activeSourceSimilarArrangement =
@@ -1682,6 +1765,10 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
           onCreatePendingArrangement={createPendingArrangementAndHighlight}
           onConfirmPendingArrangement={confirmPendingArrangement}
           onDismissPendingArrangement={dismissPendingArrangement}
+          completionSuggestion={null}
+          onConfirmCompletion={confirmCompletionSuggestion}
+          onDismissCompletion={dismissCompletionSuggestion}
+          onOpenCompletionArrangement={jumpToCompletionArrangement}
         />
       );
     }
@@ -1776,6 +1863,16 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
       mainPane={
         <div className="relative flex min-h-0 flex-1 flex-col">
           <main className="min-h-0 flex-1 overflow-hidden">{renderMainContent()}</main>
+          {pendingCompletionSuggestion ? (
+            <div className="shrink-0 bg-bg pt-1">
+              <CompletionSuggestionCard
+                suggestion={pendingCompletionSuggestion}
+                onComplete={() => confirmCompletionSuggestion(pendingCompletionSuggestion)}
+                onDismiss={dismissCompletionSuggestion}
+                onOpenArrangement={() => jumpToCompletionArrangement(pendingCompletionSuggestion)}
+              />
+            </div>
+          ) : null}
           {!recordDetail && !showSearch && !showAnswerGuide && !showAiConversation && !showSendToSelf && !showTestConversation && !settingsView && (
             <MobileBottomNavigation currentPage={currentPage} onNavigate={onNavigate} />
           )}
@@ -3025,6 +3122,10 @@ function TestIdentityConversationChat({
   onCreatePendingArrangement,
   onConfirmPendingArrangement,
   onDismissPendingArrangement,
+  completionSuggestion,
+  onConfirmCompletion,
+  onDismissCompletion,
+  onOpenCompletionArrangement,
 }: {
   summary: TestConversationSummary;
   targetUid?: string | null;
@@ -3043,6 +3144,10 @@ function TestIdentityConversationChat({
   onCreatePendingArrangement: (draft?: ArrangementDraft) => void;
   onConfirmPendingArrangement: () => void;
   onDismissPendingArrangement: () => void;
+  completionSuggestion?: ArrangementCompletionSuggestion | null;
+  onConfirmCompletion: (suggestion: ArrangementCompletionSuggestion) => void;
+  onDismissCompletion: () => void;
+  onOpenCompletionArrangement: (suggestion: ArrangementCompletionSuggestion) => void;
 }) {
   const { resolvedLocale, t } = usePreferences();
   const candidateProfile = useCandidateProfile();
@@ -3185,7 +3290,16 @@ function TestIdentityConversationChat({
           })}
         </div>
       </div>
-      {pendingArrangementDraft && (
+      {completionSuggestion ? (
+        <div className="shrink-0 bg-bg pt-1">
+          <CompletionSuggestionCard
+            suggestion={completionSuggestion}
+            onComplete={() => onConfirmCompletion(completionSuggestion)}
+            onDismiss={onDismissCompletion}
+            onOpenArrangement={() => onOpenCompletionArrangement(completionSuggestion)}
+          />
+        </div>
+      ) : pendingArrangementDraft ? (
         <div className="shrink-0 bg-bg pt-1">
           <PendingArrangementCard
             draft={pendingArrangementDraft}
@@ -3200,7 +3314,7 @@ function TestIdentityConversationChat({
             onDismiss={onDismissPendingArrangement}
           />
         </div>
-      )}
+      ) : null}
       <ChatInput
         onSubmit={onCreateReply}
         onVoiceSubmit={() => onCreateReply(t("records.voiceRecord"))}
