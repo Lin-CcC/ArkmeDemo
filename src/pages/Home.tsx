@@ -5,7 +5,25 @@ import ChatInput from "@/components/ChatInput";
 import ChatList from "@/components/ChatList";
 import RecordDetailSheet from "@/components/RecordDetailSheet";
 import RecordFullDetailScreen from "@/components/RecordFullDetailScreen";
+import AiSettingsScreen from "@/components/arrangements/AiSettingsScreen";
+import ArrangementEditorSheet from "@/components/arrangements/ArrangementEditorSheet";
+import ArrangementsPage from "@/components/arrangements/ArrangementsPage";
+import PendingArrangementCard from "@/components/arrangements/PendingArrangementCard";
 import Records from "@/pages/Records";
+import {
+  arrangementTagsStorageEvent,
+  arrangementTagsStorageKey,
+  arrangementsStorageEvent,
+  clearPendingArrangementDraft,
+  createArrangementFromDraft,
+  getInitialArrangements,
+  getInitialArrangementTags,
+  getInitialPendingArrangementDraft,
+  pendingArrangementDraftStorageKey,
+  pendingArrangementStorageEvent,
+  persistArrangementTags,
+  persistArrangements,
+} from "@/data/arrangements";
 import { aiConversationLogEntries } from "@/data/aiConversationLog";
 import { useCandidateProfile } from "@/data/candidateProfile";
 import {
@@ -44,6 +62,7 @@ import {
   type ThemeMode,
 } from "@/settings/preferences";
 import type { PageType } from "@/App";
+import type { Arrangement, ArrangementDraft, ArrangementTag } from "@/types/arrangement";
 import type { RecordItem, RecordReference, RecordSourceConversation } from "@/types/record";
 
 type HomeProps = {
@@ -57,6 +76,7 @@ type TabItem = {
 
 const tabs: TabItem[] = [
   { key: "records" },
+  { key: "arrangements" },
   { key: "insight" },
   { key: "mine" },
 ];
@@ -104,6 +124,14 @@ type HomeMessagePreview = {
   message: TestMessage;
   unreadCount: number;
 };
+
+type ArrangementEditorState =
+  | {
+      mode: "create" | "edit" | "confirm";
+      value: Arrangement | ArrangementDraft | null;
+      targetId?: string;
+    }
+  | null;
 
 const quickSearchTypes: QuickSearchType[] = [
   "image",
@@ -361,6 +389,14 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
   const [testMessages, setTestMessages] = React.useState(getInitialTestMessages);
   const [testReadState, setTestReadState] =
     React.useState<TestReadState>(getInitialTestReadState);
+  const [arrangements, setArrangements] = React.useState(getInitialArrangements);
+  const [arrangementTags, setArrangementTags] = React.useState(getInitialArrangementTags);
+  const [pendingArrangementDraft, setPendingArrangementDraft] = React.useState(
+    getInitialPendingArrangementDraft
+  );
+  const [arrangementEditor, setArrangementEditor] =
+    React.useState<ArrangementEditorState>(null);
+  const [showArrangementAiSettings, setShowArrangementAiSettings] = React.useState(false);
   const initializedBrowserNotificationMessagesRef = React.useRef(false);
   const browserNotifiedMessageIdsRef = React.useRef<Set<string>>(new Set());
 
@@ -396,6 +432,39 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
     return () => {
       window.removeEventListener("storage", handleStorage);
       window.removeEventListener(testConversationStorageEvent, refreshTestConversations);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const refreshArrangements = () => {
+      setArrangements(getInitialArrangements());
+    };
+    const refreshArrangementTags = () => {
+      setArrangementTags(getInitialArrangementTags());
+    };
+    const refreshPendingArrangement = () => {
+      setPendingArrangementDraft(getInitialPendingArrangementDraft());
+    };
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === pendingArrangementDraftStorageKey) {
+        refreshPendingArrangement();
+      }
+      if (event.key === arrangementTagsStorageKey) {
+        refreshArrangementTags();
+      }
+    };
+
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener(arrangementsStorageEvent, refreshArrangements);
+    window.addEventListener(arrangementTagsStorageEvent, refreshArrangementTags);
+    window.addEventListener(pendingArrangementStorageEvent, refreshPendingArrangement);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener(arrangementsStorageEvent, refreshArrangements);
+      window.removeEventListener(arrangementTagsStorageEvent, refreshArrangementTags);
+      window.removeEventListener(pendingArrangementStorageEvent, refreshPendingArrangement);
     };
   }, []);
 
@@ -1070,6 +1139,148 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
     ]
   );
 
+  const updateArrangements = React.useCallback((updater: (current: Arrangement[]) => Arrangement[]) => {
+    setArrangements((current) => {
+      const next = updater(current);
+      persistArrangements(next);
+      return next;
+    });
+  }, []);
+
+  const createArrangementTag = React.useCallback(
+    (name: string, color: string): ArrangementTag => {
+      const normalizedName = name.trim();
+      const existingTag = arrangementTags.find(
+        (tag) => tag.name.trim().toLowerCase() === normalizedName.toLowerCase()
+      );
+      if (existingTag) return existingTag;
+
+      const nextTag: ArrangementTag = {
+        id: `custom-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name: normalizedName,
+        color,
+        source: "custom",
+      };
+      const nextTags = [...arrangementTags, nextTag];
+      setArrangementTags(nextTags);
+      persistArrangementTags(nextTags);
+      return nextTag;
+    },
+    [arrangementTags]
+  );
+
+  const openCreateArrangement = React.useCallback(() => {
+    setArrangementEditor({
+      mode: "create",
+      value: {
+        title: "",
+        priority: "not_important_not_urgent",
+        primaryTagId: "other",
+        tagIds: ["other"],
+        timeMode: "none",
+        repeatRule: { frequency: "none", interval: 1 },
+      },
+    });
+  }, []);
+
+  const openArrangementDetail = React.useCallback((arrangement: Arrangement) => {
+    setArrangementEditor({
+      mode: "edit",
+      value: arrangement,
+      targetId: arrangement.id,
+    });
+  }, []);
+
+  const saveArrangementDraft = React.useCallback(
+    (draft: ArrangementDraft) => {
+      const editor = arrangementEditor;
+      if (!editor) return;
+
+      if (editor.targetId) {
+        updateArrangements((current) =>
+          current.map((arrangement) =>
+            arrangement.id === editor.targetId
+              ? {
+                  ...arrangement,
+                  ...draft,
+                  status: draft.status ?? arrangement.status,
+                  updatedAt: Date.now(),
+                }
+              : arrangement
+          )
+        );
+      } else {
+        const nextArrangement = createArrangementFromDraft(draft);
+        updateArrangements((current) => [nextArrangement, ...current]);
+      }
+
+      if (editor.mode === "confirm") {
+        clearPendingArrangementDraft();
+        setPendingArrangementDraft(null);
+      }
+      setArrangementEditor(null);
+      onNavigate("arrangements");
+    },
+    [arrangementEditor, onNavigate, updateArrangements]
+  );
+
+  const completeArrangement = React.useCallback(
+    (arrangement: Arrangement) => {
+      updateArrangements((current) =>
+        current.map((item) =>
+          item.id === arrangement.id
+            ? { ...item, status: "completed", updatedAt: Date.now() }
+            : item
+        )
+      );
+    },
+    [updateArrangements]
+  );
+
+  const postponeArrangement = React.useCallback(
+    (arrangement: Arrangement) => {
+      updateArrangements((current) =>
+        current.map((item) =>
+          item.id === arrangement.id
+            ? { ...item, status: "abandoned", updatedAt: Date.now() }
+            : item
+        )
+      );
+    },
+    [updateArrangements]
+  );
+
+  const openPendingArrangementEditor = React.useCallback(() => {
+    if (!pendingArrangementDraft) return;
+    setArrangementEditor({
+      mode: "confirm",
+      value: pendingArrangementDraft,
+    });
+  }, [pendingArrangementDraft]);
+
+  const confirmPendingArrangement = React.useCallback(() => {
+    if (!pendingArrangementDraft) return;
+    const nextArrangement = createArrangementFromDraft(pendingArrangementDraft);
+    updateArrangements((current) => [nextArrangement, ...current]);
+    clearPendingArrangementDraft();
+    setPendingArrangementDraft(null);
+    onNavigate("arrangements");
+  }, [onNavigate, pendingArrangementDraft, updateArrangements]);
+
+  const dismissPendingArrangement = React.useCallback(() => {
+    clearPendingArrangementDraft();
+    setPendingArrangementDraft(null);
+  }, []);
+
+  const pendingArrangementOverlay = pendingArrangementDraft ? (
+    <PendingArrangementCard
+      draft={pendingArrangementDraft}
+      onOpenEditor={openPendingArrangementEditor}
+      onConfirm={confirmPendingArrangement}
+      onDismiss={dismissPendingArrangement}
+    />
+  ) : null;
+
   const renderMainContent = () => {
     if (recordDetail) {
       return (
@@ -1098,6 +1309,10 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
           onOpenAppearance={() => setSettingsView("appearance")}
         />
       );
+    }
+
+    if (showArrangementAiSettings) {
+      return <AiSettingsScreen onBack={() => setShowArrangementAiSettings(false)} />;
     }
 
     if (showAiConversation) {
@@ -1170,6 +1385,20 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
       );
     }
 
+    if (currentPage === "arrangements") {
+      return (
+        <ArrangementsPage
+          arrangements={arrangements}
+          arrangementTags={arrangementTags}
+          onCreate={openCreateArrangement}
+          onOpen={openArrangementDetail}
+          onComplete={completeArrangement}
+          onPostpone={postponeArrangement}
+          onOpenAiSettings={() => setShowArrangementAiSettings(true)}
+        />
+      );
+    }
+
     if (currentPage === "insight") {
       return <InsightPreview />;
     }
@@ -1198,6 +1427,7 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
           onOpenSourceConversation={openSourceConversation}
           onOpenRecordDetail={setRecordDetail}
           onOpenRecordSnapshot={setRecordSnapshot}
+          pendingOverlay={pendingArrangementOverlay}
         />
       </div>
     );
@@ -1208,7 +1438,7 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
       mainPane={
         <div className="relative flex min-h-0 flex-1 flex-col">
           <main className="min-h-0 flex-1 overflow-hidden">{renderMainContent()}</main>
-          {!recordDetail && !showSearch && !showAnswerGuide && !showAiConversation && !showSendToSelf && !showTestConversation && !settingsView && (
+          {!recordDetail && !showSearch && !showAnswerGuide && !showAiConversation && !showSendToSelf && !showTestConversation && !settingsView && !showArrangementAiSettings && (
             <MobileBottomNavigation currentPage={currentPage} onNavigate={onNavigate} />
           )}
           <MobileSideDrawer
@@ -1235,6 +1465,15 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
             record={recordSnapshot}
             onClose={() => setRecordSnapshot(null)}
             onOpenSource={openSourceConversation}
+          />
+          <ArrangementEditorSheet
+            open={Boolean(arrangementEditor)}
+            mode={arrangementEditor?.mode ?? "create"}
+            initialValue={arrangementEditor?.value ?? null}
+            arrangementTags={arrangementTags}
+            onCreateTag={createArrangementTag}
+            onClose={() => setArrangementEditor(null)}
+            onSave={saveArrangementDraft}
           />
         </div>
       }
@@ -3430,6 +3669,7 @@ function ThemePreview({ mode }: { mode: ResolvedTheme }) {
 
 function getTabLabel(page: PageType, t: ReturnType<typeof usePreferences>["t"]) {
   if (page === "records") return t("tabs.records");
+  if (page === "arrangements") return t("tabs.arrangements");
   if (page === "insight") return t("tabs.insight");
   return t("tabs.mine");
 }

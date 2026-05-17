@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import ChatInput from "@/components/ChatInput";
 import ChatList from "@/components/ChatList";
 import EmptyState from "@/components/EmptyState";
@@ -23,6 +23,7 @@ type RecordsProps = {
   onOpenSourceConversation?: (source: RecordSourceConversation) => void;
   onOpenRecordDetail?: (record: RecordItem) => void;
   onOpenRecordSnapshot?: (record: RecordItem) => void;
+  pendingOverlay?: ReactNode;
 };
 
 function parseAiConversationTimestamp(value: string, fallbackTime: number) {
@@ -52,6 +53,7 @@ export default function Records({
   onOpenSourceConversation,
   onOpenRecordDetail,
   onOpenRecordSnapshot,
+  pendingOverlay,
 }: RecordsProps) {
   const { t } = usePreferences();
   const fallbackDemoRecords = useMemo<RecordItem[]>(
@@ -194,10 +196,13 @@ export default function Records({
       )}
 
       {showComposer && (
-        <ChatInput
-          onSubmit={handleCreateRecord}
-          onVoiceSubmit={handleCreateVoiceRecord}
-        />
+        <>
+          {pendingOverlay}
+          <ChatInput
+            onSubmit={handleCreateRecord}
+            onVoiceSubmit={handleCreateVoiceRecord}
+          />
+        </>
       )}
 
     </div>

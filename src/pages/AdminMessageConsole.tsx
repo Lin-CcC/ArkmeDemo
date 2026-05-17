@@ -1,4 +1,5 @@
 import React from "react";
+import { persistPendingArrangementDraft } from "@/data/arrangements";
 import {
   createTestGroup,
   createTestGroupMessage,
@@ -20,6 +21,7 @@ import {
   type TestIdentity,
   type TestMessage,
 } from "@/data/testConversations";
+import { detectArrangementFromMessage } from "@/lib/arrangementDetection";
 import { formatBubbleTime, formatTimeLabel } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
@@ -79,6 +81,8 @@ export default function AdminMessageConsole() {
   const [groupNote, setGroupNote] = React.useState("");
   const [messageText, setMessageText] = React.useState("");
   const [messageTextFocused, setMessageTextFocused] = React.useState(false);
+  const [detectedArrangementTitle, setDetectedArrangementTitle] =
+    React.useState<string | null>(null);
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
   const identityPickerRef = React.useRef<HTMLDivElement>(null);
   const groupPickerRef = React.useRef<HTMLDivElement>(null);
@@ -305,18 +309,30 @@ export default function AdminMessageConsole() {
     if (!activeIdentity || !messageText.trim()) return;
     if (messageMode === "group" && !activeGroup) return;
 
+    const text = messageText.trim();
+    const nextMessage =
+      messageMode === "group" && activeGroup
+        ? createTestGroupMessage(activeGroup.id, activeIdentity.id, text)
+        : createTestMessage(activeIdentity.id, text);
+
     setMessages((prev) => {
-      const nextMessage =
-        messageMode === "group" && activeGroup
-          ? createTestGroupMessage(activeGroup.id, activeIdentity.id, messageText)
-          : createTestMessage(activeIdentity.id, messageText);
-      const nextMessages = [
-        ...prev,
-        nextMessage,
-      ];
+      const nextMessages = [...prev, nextMessage];
       persistTestMessages(nextMessages);
       return nextMessages;
     });
+
+    const detectedDraft = detectArrangementFromMessage(nextMessage, {
+      conversationTitle:
+        messageMode === "group" && activeGroup ? activeGroup.name : activeIdentity.name,
+      senderName: activeIdentity.name,
+      senderAvatarLabel: activeIdentity.avatarLabel,
+    });
+    if (detectedDraft) {
+      persistPendingArrangementDraft(detectedDraft);
+      setDetectedArrangementTitle(detectedDraft.title);
+    } else {
+      setDetectedArrangementTitle(null);
+    }
     setMessageText("");
   };
 
@@ -458,6 +474,11 @@ export default function AdminMessageConsole() {
           </div>
 
           <div className="shrink-0 bg-[var(--admin-panel-bg)] px-5 pb-4 pt-3">
+            {detectedArrangementTitle && (
+              <div className="mb-3 rounded-[12px] border border-primary/20 bg-primary/10 px-3 py-2 text-[12px] leading-5 text-text">
+                已识别安排「{detectedArrangementTitle}」，请到移动端输入框上方确认。
+              </div>
+            )}
             {activeIdentity ? (
               <div
                 className="admin-message-input-shell mx-auto w-full rounded-[14px] border bg-[var(--admin-input-bg)] transition hover:bg-[var(--admin-input-hover-bg)]"
