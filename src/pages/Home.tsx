@@ -19,11 +19,13 @@ import {
   getInitialArrangements,
   getInitialArrangementTags,
   getInitialPendingArrangementDraft,
+  mergeDraftIntoArrangement,
   pendingArrangementDraftStorageKey,
   pendingArrangementStorageEvent,
   persistArrangementTags,
   persistArrangements,
 } from "@/data/arrangements";
+import { findSimilarArrangement } from "@/lib/arrangementSimilarity";
 import { aiConversationLogEntries } from "@/data/aiConversationLog";
 import { useCandidateProfile } from "@/data/candidateProfile";
 import {
@@ -135,6 +137,7 @@ type ArrangementEditorState =
       mode: "create" | "edit" | "confirm";
       value: Arrangement | ArrangementDraft | null;
       targetId?: string;
+      ignoreSimilar?: boolean;
     }
   | null;
 
@@ -432,6 +435,7 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
     React.useState<ArrangementEditorState>(null);
   const [arrangementActionToast, setArrangementActionToast] =
     React.useState<ArrangementActionToast>(null);
+  const [highlightedArrangementId, setHighlightedArrangementId] = React.useState<string | null>(null);
   const initializedBrowserNotificationMessagesRef = React.useRef(false);
   const browserNotifiedMessageIdsRef = React.useRef<Set<string>>(new Set());
 
@@ -439,6 +443,14 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
     0,
     aiConversationTotalCount - lastReadAiConversationCount
   );
+  const similarPendingArrangement = React.useMemo(
+    () => findSimilarArrangement(pendingArrangementDraft, arrangements),
+    [arrangements, pendingArrangementDraft]
+  );
+  const activeEditorSimilarArrangement =
+    arrangementEditor?.mode === "confirm" && !arrangementEditor.ignoreSimilar
+      ? similarPendingArrangement?.arrangement ?? null
+      : null;
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1435,6 +1447,25 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
     return () => window.clearTimeout(timer);
   }, [arrangementActionToast]);
 
+  React.useEffect(() => {
+    if (!highlightedArrangementId) return;
+
+    const scrollTimer = window.setTimeout(() => {
+      const element = document.querySelector<HTMLElement>(
+        `[data-arrangement-card-id="${CSS.escape(highlightedArrangementId)}"]`
+      );
+      element?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 80);
+    const clearTimer = window.setTimeout(() => {
+      setHighlightedArrangementId(null);
+    }, 2100);
+
+    return () => {
+      window.clearTimeout(scrollTimer);
+      window.clearTimeout(clearTimer);
+    };
+  }, [highlightedArrangementId]);
+
   const openPendingArrangementEditor = React.useCallback(() => {
     if (!pendingArrangementDraft) return;
     setArrangementEditor({
@@ -1443,19 +1474,95 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
     });
   }, [pendingArrangementDraft]);
 
-  const confirmPendingArrangement = React.useCallback(() => {
-    if (!pendingArrangementDraft) return;
-    const nextArrangement = createArrangementFromDraft(pendingArrangementDraft);
+  const createPendingArrangement = React.useCallback((draftOverride?: ArrangementDraft) => {
+    const draft = draftOverride ?? pendingArrangementDraft;
+    if (!draft) return;
+    const nextArrangement = createArrangementFromDraft(draft);
     updateArrangements((current) => [nextArrangement, ...current]);
     clearPendingArrangementDraft();
     setPendingArrangementDraft(null);
+    setArrangementEditor(null);
     onNavigate("arrangements");
   }, [onNavigate, pendingArrangementDraft, updateArrangements]);
+
+  const confirmPendingArrangement = React.useCallback(() => {
+    createPendingArrangement();
+  }, [createPendingArrangement]);
+
+  const mergePendingArrangement = React.useCallback((draftOverride?: ArrangementDraft) => {
+    const draft = draftOverride ?? pendingArrangementDraft;
+    if (!draft || !similarPendingArrangement) return;
+
+    updateArrangements((current) =>
+      current.map((arrangement) =>
+        arrangement.id === similarPendingArrangement.arrangement.id
+          ? mergeDraftIntoArrangement(arrangement, draft)
+          : arrangement
+      )
+    );
+    clearPendingArrangementDraft();
+    setPendingArrangementDraft(null);
+    setArrangementEditor(null);
+    onNavigate("arrangements");
+  }, [onNavigate, pendingArrangementDraft, similarPendingArrangement, updateArrangements]);
 
   const dismissPendingArrangement = React.useCallback(() => {
     clearPendingArrangementDraft();
     setPendingArrangementDraft(null);
+    setArrangementEditor(null);
   }, []);
+
+  const closeConversationOverlays = React.useCallback(() => {
+    setShowMenu(false);
+    setShowAnswerGuide(false);
+    setShowAiConversation(false);
+    setShowSendToSelf(false);
+    setShowTestConversation(false);
+    setSettingsView(null);
+    setRecordDetail(null);
+    setRecordSnapshot(null);
+    setConversationReturnContext({ mode: "drawer" });
+  }, []);
+
+  const createPendingArrangementAndHighlight = React.useCallback(
+    (draftOverride?: ArrangementDraft) => {
+      const draft = draftOverride ?? pendingArrangementDraft;
+      if (!draft) return;
+
+      const nextArrangement = createArrangementFromDraft(draft);
+      updateArrangements((current) => [nextArrangement, ...current]);
+      clearPendingArrangementDraft();
+      setPendingArrangementDraft(null);
+      setArrangementEditor(null);
+      closeConversationOverlays();
+      setHighlightedArrangementId(nextArrangement.id);
+      onNavigate("arrangements");
+    },
+    [closeConversationOverlays, onNavigate, pendingArrangementDraft, updateArrangements]
+  );
+
+  const jumpToArrangement = React.useCallback(
+    (arrangement: Arrangement) => {
+      closeConversationOverlays();
+      setArrangementEditor(null);
+      setHighlightedArrangementId(arrangement.id);
+      onNavigate("arrangements");
+    },
+    [closeConversationOverlays, onNavigate]
+  );
+
+  const mergePendingArrangementAndHighlight = React.useCallback(
+    (draftOverride?: ArrangementDraft) => {
+      const targetArrangement = similarPendingArrangement?.arrangement;
+      mergePendingArrangement(draftOverride);
+      if (!targetArrangement) return;
+
+      closeConversationOverlays();
+      setHighlightedArrangementId(targetArrangement.id);
+      onNavigate("arrangements");
+    },
+    [closeConversationOverlays, mergePendingArrangement, onNavigate, similarPendingArrangement]
+  );
 
   const openArrangementSource = React.useCallback(
     (source: ArrangementSource) => {
@@ -1477,8 +1584,12 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
     <PendingArrangementCard
       draft={pendingArrangementDraft}
       arrangementTags={arrangementTags}
+      similarArrangement={similarPendingArrangement?.arrangement ?? null}
       onOpenEditor={openPendingArrangementEditor}
       onOpenSource={openArrangementSource}
+      onOpenSimilarArrangement={jumpToArrangement}
+      onMergeSimilar={mergePendingArrangementAndHighlight}
+      onCreateAnyway={createPendingArrangementAndHighlight}
       onConfirm={confirmPendingArrangement}
       onDismiss={dismissPendingArrangement}
     />
@@ -1486,6 +1597,10 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
   const activeSourcePendingArrangementDraft =
     pendingArrangementDraft?.source?.conversationId === activeTestConversationSummary?.conversationId
       ? pendingArrangementDraft
+      : null;
+  const activeSourceSimilarArrangement =
+    activeSourcePendingArrangementDraft && similarPendingArrangement?.arrangement
+      ? similarPendingArrangement.arrangement
       : null;
 
   const renderMainContent = () => {
@@ -1558,9 +1673,13 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
           onOpenRecordSnapshot={setRecordSnapshot}
           onCreateReply={(content) => createTestReply(activeTestConversationSummary, content)}
           pendingArrangementDraft={activeSourcePendingArrangementDraft}
+          similarArrangement={activeSourceSimilarArrangement}
           arrangementTags={arrangementTags}
           onOpenPendingArrangementEditor={openPendingArrangementEditor}
           onOpenPendingArrangementSource={openArrangementSource}
+          onOpenSimilarArrangement={jumpToArrangement}
+          onMergePendingArrangement={mergePendingArrangementAndHighlight}
+          onCreatePendingArrangement={createPendingArrangementAndHighlight}
           onConfirmPendingArrangement={confirmPendingArrangement}
           onDismissPendingArrangement={dismissPendingArrangement}
         />
@@ -1606,6 +1725,7 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
           arrangements={arrangements}
           arrangementTags={arrangementTags}
           actionToast={arrangementActionToast}
+          highlightedArrangementId={highlightedArrangementId}
           onCreate={openCreateArrangement}
           onOpen={openArrangementDetail}
           onCycleStatus={cycleArrangementStatus}
@@ -1689,6 +1809,7 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
             mode={arrangementEditor?.mode ?? "create"}
             initialValue={arrangementEditor?.value ?? null}
             arrangementTags={arrangementTags}
+            similarArrangement={activeEditorSimilarArrangement}
             onCreateTag={createArrangementTag}
             onClose={() => setArrangementEditor(null)}
             onOpenSource={openArrangementSource}
@@ -2895,9 +3016,13 @@ function TestIdentityConversationChat({
   onOpenRecordSnapshot,
   onCreateReply,
   pendingArrangementDraft,
+  similarArrangement,
   arrangementTags,
   onOpenPendingArrangementEditor,
   onOpenPendingArrangementSource,
+  onOpenSimilarArrangement,
+  onMergePendingArrangement,
+  onCreatePendingArrangement,
   onConfirmPendingArrangement,
   onDismissPendingArrangement,
 }: {
@@ -2909,9 +3034,13 @@ function TestIdentityConversationChat({
   onOpenRecordSnapshot: (record: RecordItem) => void;
   onCreateReply: (content: string) => void;
   pendingArrangementDraft?: ArrangementDraft | null;
+  similarArrangement?: Arrangement | null;
   arrangementTags: ArrangementTag[];
   onOpenPendingArrangementEditor: () => void;
   onOpenPendingArrangementSource: (source: ArrangementSource) => void;
+  onOpenSimilarArrangement: (arrangement: Arrangement) => void;
+  onMergePendingArrangement: (draft?: ArrangementDraft) => void;
+  onCreatePendingArrangement: (draft?: ArrangementDraft) => void;
   onConfirmPendingArrangement: () => void;
   onDismissPendingArrangement: () => void;
 }) {
@@ -3061,8 +3190,12 @@ function TestIdentityConversationChat({
           <PendingArrangementCard
             draft={pendingArrangementDraft}
             arrangementTags={arrangementTags}
+            similarArrangement={similarArrangement}
             onOpenEditor={onOpenPendingArrangementEditor}
             onOpenSource={onOpenPendingArrangementSource}
+            onOpenSimilarArrangement={onOpenSimilarArrangement}
+            onMergeSimilar={onMergePendingArrangement}
+            onCreateAnyway={onCreatePendingArrangement}
             onConfirm={onConfirmPendingArrangement}
             onDismiss={onDismissPendingArrangement}
           />

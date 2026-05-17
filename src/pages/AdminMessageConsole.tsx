@@ -22,6 +22,7 @@ import {
   type TestMessage,
 } from "@/data/testConversations";
 import { recognizeArrangementFromMessage } from "@/lib/arrangementRecognitionProvider";
+import type { ArrangementRecognitionOrigin } from "@/lib/arrangementRecognitionProvider";
 import { formatBubbleTime, formatTimeLabel } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
@@ -84,6 +85,10 @@ export default function AdminMessageConsole() {
   const [sendingMessage, setSendingMessage] = React.useState(false);
   const [detectedArrangementTitle, setDetectedArrangementTitle] =
     React.useState<string | null>(null);
+  const [recognitionStatus, setRecognitionStatus] = React.useState<{
+    origin: ArrangementRecognitionOrigin;
+    message: string;
+  } | null>(null);
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
   const identityPickerRef = React.useRef<HTMLDivElement>(null);
   const groupPickerRef = React.useRef<HTMLDivElement>(null);
@@ -327,18 +332,30 @@ export default function AdminMessageConsole() {
     setSendingMessage(true);
     setMessageText("");
     try {
-      const detectedDraft = await recognizeArrangementFromMessage(nextMessage, {
+      const recognitionResult = await recognizeArrangementFromMessage(nextMessage, {
         conversationTitle:
           messageMode === "group" && activeGroup ? activeGroup.name : activeIdentity.name,
         senderName: activeIdentity.name,
         senderAvatarLabel: activeIdentity.avatarLabel,
       });
+      const detectedDraft = recognitionResult.draft;
       if (detectedDraft) {
         persistPendingArrangementDraft(detectedDraft);
         setDetectedArrangementTitle(detectedDraft.title);
+        setRecognitionStatus({
+          origin: recognitionResult.origin,
+          message:
+            recognitionResult.origin === "ai"
+              ? "智能识别已完成"
+              : recognitionResult.reason ?? "已使用本地规则识别",
+        });
         return;
       }
       setDetectedArrangementTitle(null);
+      setRecognitionStatus({
+        origin: recognitionResult.origin,
+        message: recognitionResult.reason ?? "这条消息没有识别出安排",
+      });
     } finally {
       setSendingMessage(false);
     }
@@ -482,9 +499,25 @@ export default function AdminMessageConsole() {
           </div>
 
           <div className="shrink-0 bg-[var(--admin-panel-bg)] px-5 pb-4 pt-3">
-            {detectedArrangementTitle && (
-              <div className="mb-3 rounded-[12px] border border-primary/20 bg-primary/10 px-3 py-2 text-[12px] leading-5 text-text">
-                已识别安排「{detectedArrangementTitle}」，请到移动端输入框上方确认。
+            {(detectedArrangementTitle || recognitionStatus) && (
+              <div
+                className={cn(
+                  "mb-3 rounded-[12px] border px-3 py-2 text-[12px] leading-5 text-text",
+                  recognitionStatus?.origin === "ai"
+                    ? "border-primary/20 bg-primary/10"
+                    : "border-[#F2C46D]/50 bg-[#FFF8E5]"
+                )}
+              >
+                {detectedArrangementTitle ? (
+                  <>
+                    已识别安排「{detectedArrangementTitle}」，请到移动端输入框上方确认。
+                    {recognitionStatus && (
+                      <span className="ml-1 text-text-muted">({recognitionStatus.message})</span>
+                    )}
+                  </>
+                ) : (
+                  recognitionStatus?.message
+                )}
               </div>
             )}
             {activeIdentity ? (

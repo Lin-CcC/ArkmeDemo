@@ -28,6 +28,7 @@ type ArrangementsPageProps = {
   arrangements: Arrangement[];
   arrangementTags: ArrangementTag[];
   actionToast: ArrangementActionToast;
+  highlightedArrangementId?: string | null;
   onCreate: () => void;
   onOpen: (arrangement: Arrangement) => void;
   onCycleStatus: (arrangement: Arrangement) => void;
@@ -124,6 +125,7 @@ export default function ArrangementsPage({
   arrangements,
   arrangementTags,
   actionToast,
+  highlightedArrangementId,
   onCreate,
   onOpen,
   onCycleStatus,
@@ -395,6 +397,7 @@ export default function ArrangementsPage({
                       key={arrangement.id}
                       arrangement={arrangement}
                       arrangementTags={arrangementTags}
+                      highlighted={highlightedArrangementId === arrangement.id}
                       onOpen={() => onOpen(arrangement)}
                       onCycleStatus={() => onCycleStatus(arrangement)}
                       onDelete={() => onDelete(arrangement)}
@@ -427,6 +430,7 @@ export default function ArrangementsPage({
                       key={arrangement.id}
                       arrangement={arrangement}
                       arrangementTags={arrangementTags}
+                      highlighted={highlightedArrangementId === arrangement.id}
                       onOpen={() => onOpen(arrangement)}
                       onCycleStatus={() => onCycleStatus(arrangement)}
                       onDelete={() => onDelete(arrangement)}
@@ -459,6 +463,7 @@ export default function ArrangementsPage({
                       key={arrangement.id}
                       arrangement={arrangement}
                       arrangementTags={arrangementTags}
+                      highlighted={highlightedArrangementId === arrangement.id}
                       onOpen={() => onOpen(arrangement)}
                       onCycleStatus={() => onCycleStatus(arrangement)}
                       onDelete={() => onDelete(arrangement)}
@@ -516,6 +521,7 @@ export default function ArrangementsPage({
                                 key={arrangement.id}
                                 arrangement={arrangement}
                                 arrangementTags={arrangementTags}
+                                highlighted={highlightedArrangementId === arrangement.id}
                                 onOpen={() => onOpen(arrangement)}
                                 onCycleStatus={() => onCycleStatus(arrangement)}
                                 onDelete={() => onDelete(arrangement)}
@@ -682,6 +688,7 @@ function EmptyArrangementsState({
 function ArrangementListItem({
   arrangement,
   arrangementTags,
+  highlighted,
   onOpen,
   onCycleStatus,
   onDelete,
@@ -693,6 +700,7 @@ function ArrangementListItem({
 }: {
   arrangement: Arrangement;
   arrangementTags: ArrangementTag[];
+  highlighted: boolean;
   onOpen: () => void;
   onCycleStatus: () => void;
   onDelete: () => void;
@@ -882,7 +890,7 @@ function ArrangementListItem({
       <div
         className={`relative rounded-[14px] border border-border bg-surface px-3.5 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)] ${
           isSwiping || dragging ? "" : "transition-transform duration-200 ease-out"
-        }`}
+        } ${highlighted ? "arrangement-card-highlight" : ""}`}
         style={{ transform: `translateX(${dragging ? 0 : offsetX}px)`, touchAction: "none" }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}

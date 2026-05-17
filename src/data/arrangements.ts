@@ -86,6 +86,9 @@ const defaultArrangements: Arrangement[] = [
   },
 ];
 
+export const defaultArrangementAiEndpointUrl = "https://api.openai.com/v1";
+export const defaultArrangementAiModel = "gpt-4o-mini";
+
 function readJsonValue(key: string): unknown {
   if (typeof window === "undefined") return null;
 
@@ -202,6 +205,27 @@ function normalizeSource(value: unknown): ArrangementSource | undefined {
   };
 }
 
+function getNormalizedSources(value: Partial<ArrangementDraft>) {
+  const sources = Array.isArray(value.sources)
+    ? value.sources
+        .map(normalizeSource)
+        .filter((source): source is ArrangementSource => Boolean(source))
+    : [];
+  const legacySource = normalizeSource(value.source);
+  return mergeArrangementSources([...(legacySource ? [legacySource] : []), ...sources]);
+}
+
+export function mergeArrangementSources(sources: ArrangementSource[]) {
+  const byMessageId = new Map<string, ArrangementSource>();
+  sources.forEach((source) => {
+    const key = `${source.conversationId}:${source.messageId}`;
+    if (!byMessageId.has(key)) {
+      byMessageId.set(key, source);
+    }
+  });
+  return Array.from(byMessageId.values()).sort((a, b) => a.sentAt - b.sentAt);
+}
+
 function normalizeTag(value: unknown, index: number): ArrangementTag | null {
   if (!value || typeof value !== "object") return null;
 
@@ -316,6 +340,7 @@ export function normalizeArrangementDraft(
   const timeText = normalizeText(draft.timeText) || undefined;
   const startText = normalizeText(draft.startText) || undefined;
   const endText = normalizeText(draft.endText) || undefined;
+  const sources = getNormalizedSources(draft);
   const timeMode = draft.timeMode
     ? normalizeTimeMode(draft.timeMode)
     : inferLegacyTimeMode(timeText, startText, endText);
@@ -343,7 +368,8 @@ export function normalizeArrangementDraft(
     personText: normalizeText(draft.personText) || undefined,
     placeText: normalizeText(draft.placeText) || undefined,
     note: normalizeText(draft.note) || undefined,
-    source: normalizeSource(draft.source),
+    source: sources[0],
+    sources,
   };
 }
 
@@ -414,12 +440,19 @@ export function clearPendingArrangementDraft() {
 export function getInitialArrangementAiSettings(): ArrangementAiSettings {
   const value = readJsonValue(arrangementAiSettingsStorageKey);
   if (!value || typeof value !== "object") {
-    return { apiKey: "", updatedAt: null };
+    return {
+      apiKey: "",
+      endpointUrl: defaultArrangementAiEndpointUrl,
+      model: defaultArrangementAiModel,
+      updatedAt: null,
+    };
   }
 
   const settings = value as Partial<ArrangementAiSettings>;
   return {
     apiKey: normalizeText(settings.apiKey),
+    endpointUrl: normalizeText(settings.endpointUrl) || defaultArrangementAiEndpointUrl,
+    model: normalizeText(settings.model) || defaultArrangementAiModel,
     updatedAt:
       typeof settings.updatedAt === "number" && Number.isFinite(settings.updatedAt)
         ? settings.updatedAt
@@ -427,26 +460,70 @@ export function getInitialArrangementAiSettings(): ArrangementAiSettings {
   };
 }
 
-export function persistArrangementAiSettings(apiKey: string) {
+export function persistArrangementAiSettings(settings: {
+  apiKey: string;
+  endpointUrl?: string;
+  model?: string;
+}) {
   writeJsonValue(arrangementAiSettingsStorageKey, {
-    apiKey: apiKey.trim(),
+    apiKey: settings.apiKey.trim(),
+    endpointUrl: normalizeText(settings.endpointUrl) || defaultArrangementAiEndpointUrl,
+    model: normalizeText(settings.model) || defaultArrangementAiModel,
     updatedAt: Date.now(),
   });
 }
 
 export function clearArrangementAiSettings() {
-  writeJsonValue(arrangementAiSettingsStorageKey, { apiKey: "", updatedAt: null });
+  writeJsonValue(arrangementAiSettingsStorageKey, {
+    apiKey: "",
+    endpointUrl: defaultArrangementAiEndpointUrl,
+    model: defaultArrangementAiModel,
+    updatedAt: null,
+  });
 }
 
 export function createArrangementFromDraft(draft: ArrangementDraft): Arrangement {
   const timestamp = Date.now();
+  const sources = mergeArrangementSources([
+    ...(draft.source ? [draft.source] : []),
+    ...(draft.sources ?? []),
+  ]);
   return {
     ...draft,
     id: `arrangement-${timestamp}-${Math.random().toString(36).slice(2, 7)}`,
     status: draft.status ?? "active",
     timeMode: draft.timeMode ?? "none",
     repeatRule: draft.repeatRule ?? { frequency: "none", interval: 1 },
+    source: sources[0],
+    sources,
     createdAt: timestamp,
     updatedAt: timestamp,
   };
+}
+
+export function mergeDraftIntoArrangement(
+  arrangement: Arrangement,
+  draft: ArrangementDraft
+): Arrangement {
+  const sources = mergeArrangementSources([
+    ...(arrangement.source ? [arrangement.source] : []),
+    ...(arrangement.sources ?? []),
+    ...(draft.source ? [draft.source] : []),
+    ...(draft.sources ?? []),
+  ]);
+  return {
+    ...arrangement,
+    source: sources[0],
+    sources,
+    note: mergeArrangementNote(arrangement.note, draft.note),
+    updatedAt: Date.now(),
+  };
+}
+
+function mergeArrangementNote(existingNote?: string, draftNote?: string) {
+  const existing = existingNote?.trim();
+  const next = draftNote?.trim();
+  if (!existing) return next || undefined;
+  if (!next || existing.includes(next)) return existing;
+  return `${existing}\n\n补充来源：${next}`;
 }

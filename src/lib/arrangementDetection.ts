@@ -96,8 +96,15 @@ export function detectPrimaryTagId(text: string) {
 
 export function buildDetectedTitle(text: string) {
   const cleaned = text
-    .replace(/^(好的|好|嗯|收到|帮我|记得|一定要|请你|麻烦你)[，,。.\s]*/g, "")
+    .replace(
+      /^(我爸|爸爸|妈妈|我妈|家人|同事|朋友|面试官)?(刚刚|又)?(提醒|跟我说|和我说|叫我|让我)[^，,。.!！?？]*[，,。.!！?？\s]*/g,
+      ""
+    )
+    .replace(/^(好的|好|嗯|收到|帮我|记得|一定要|请你|麻烦你|别忘了|不要忘了)[，,。.\s]*/g, "")
+    .replace(/(一定)?记得/g, "")
+    .replace(/别忘了|不要忘了/g, "")
     .replace(/[，,。.!！?？]+$/g, "")
+    .replace(/\s+/g, " ")
     .trim();
 
   if (!cleaned) return "确认一条新安排";
