@@ -1451,11 +1451,16 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
   const pendingArrangementOverlay = pendingArrangementDraft ? (
     <PendingArrangementCard
       draft={pendingArrangementDraft}
+      arrangementTags={arrangementTags}
       onOpenEditor={openPendingArrangementEditor}
       onConfirm={confirmPendingArrangement}
       onDismiss={dismissPendingArrangement}
     />
   ) : null;
+  const activeSourcePendingArrangementDraft =
+    pendingArrangementDraft?.source?.conversationId === activeTestConversationSummary?.conversationId
+      ? pendingArrangementDraft
+      : null;
 
   const renderMainContent = () => {
     if (recordDetail) {
@@ -1525,6 +1530,11 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
           onOpenRecordDetail={setRecordDetail}
           onOpenRecordSnapshot={setRecordSnapshot}
           onCreateReply={(content) => createTestReply(activeTestConversationSummary, content)}
+          pendingArrangementDraft={activeSourcePendingArrangementDraft}
+          arrangementTags={arrangementTags}
+          onOpenPendingArrangementEditor={openPendingArrangementEditor}
+          onConfirmPendingArrangement={confirmPendingArrangement}
+          onDismissPendingArrangement={dismissPendingArrangement}
         />
       );
     }
@@ -2854,6 +2864,11 @@ function TestIdentityConversationChat({
   onOpenRecordDetail,
   onOpenRecordSnapshot,
   onCreateReply,
+  pendingArrangementDraft,
+  arrangementTags,
+  onOpenPendingArrangementEditor,
+  onConfirmPendingArrangement,
+  onDismissPendingArrangement,
 }: {
   summary: TestConversationSummary;
   targetUid?: string | null;
@@ -2861,6 +2876,11 @@ function TestIdentityConversationChat({
   onOpenRecordDetail: (record: RecordItem) => void;
   onOpenRecordSnapshot: (record: RecordItem) => void;
   onCreateReply: (content: string) => void;
+  pendingArrangementDraft?: ArrangementDraft | null;
+  arrangementTags: ArrangementTag[];
+  onOpenPendingArrangementEditor: () => void;
+  onConfirmPendingArrangement: () => void;
+  onDismissPendingArrangement: () => void;
 }) {
   const { resolvedLocale, t } = usePreferences();
   const candidateProfile = useCandidateProfile();
@@ -2992,6 +3012,17 @@ function TestIdentityConversationChat({
           })}
         </div>
       </div>
+      {pendingArrangementDraft && (
+        <div className="shrink-0 bg-bg pt-1">
+          <PendingArrangementCard
+            draft={pendingArrangementDraft}
+            arrangementTags={arrangementTags}
+            onOpenEditor={onOpenPendingArrangementEditor}
+            onConfirm={onConfirmPendingArrangement}
+            onDismiss={onDismissPendingArrangement}
+          />
+        </div>
+      )}
       <ChatInput
         onSubmit={onCreateReply}
         onVoiceSubmit={() => onCreateReply(t("records.voiceRecord"))}
