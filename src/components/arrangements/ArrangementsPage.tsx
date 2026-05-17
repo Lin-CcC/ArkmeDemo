@@ -18,6 +18,10 @@ type ArrangementActionToast =
       kind: "delete";
       arrangement: Arrangement;
     }
+  | {
+      kind: "move";
+      arrangement: Arrangement;
+    }
   | null;
 
 type ArrangementsPageProps = {
@@ -39,6 +43,7 @@ type TimeScope = "all" | "today" | "recent" | "unscheduled";
 
 type ArrangementMoveTarget = {
   beforeId?: string;
+  afterId?: string;
   status?: ArrangementStatus;
   priority?: ArrangementPriority;
   dateKey?: string | null;
@@ -50,6 +55,23 @@ type TimeScopeOption = {
   value: TimeScope;
   label: string;
   count: number;
+};
+
+type DragPreviewState = {
+  arrangement: Arrangement;
+  clientX: number;
+  clientY: number;
+  width: number;
+  height: number;
+  offsetX: number;
+  offsetY: number;
+};
+
+type DropIndicatorState = {
+  left: number;
+  top: number;
+  width: number;
+  target: ArrangementMoveTarget;
 };
 
 const allTimeScopeValue: TimeScope = "all";
@@ -114,6 +136,8 @@ export default function ArrangementsPage({
   const [timeScope, setTimeScope] = React.useState<TimeScope>(allTimeScopeValue);
   const [groupMode, setGroupMode] = React.useState<GroupMode>("date");
   const [showGroupSheet, setShowGroupSheet] = React.useState(false);
+  const [dragPreview, setDragPreview] = React.useState<DragPreviewState | null>(null);
+  const [dropIndicator, setDropIndicator] = React.useState<DropIndicatorState | null>(null);
 
   const tagFilteredArrangements = React.useMemo(
     () =>
@@ -171,19 +195,26 @@ export default function ArrangementsPage({
 
   const currentGroupMode = groupModes.find((mode) => mode.value === groupMode) ?? groupModes[0];
 
-  const handleMoveDrop = React.useCallback(
+  const getDropTarget = React.useCallback(
     (arrangement: Arrangement, clientX: number, clientY: number) => {
       const element = document.elementFromPoint(clientX, clientY);
-      if (!element) return;
+      if (!element) return null;
 
       const cardElement = element.closest<HTMLElement>("[data-arrangement-card-id]");
-      const dropElement =
-        element.closest<HTMLElement>("[data-arrangement-drop]") ??
-        cardElement?.closest<HTMLElement>("[data-arrangement-drop]");
+      if (!cardElement) return null;
+
+      const dropElement = cardElement.closest<HTMLElement>("[data-arrangement-drop]");
       const target: ArrangementMoveTarget = {};
 
       const beforeId = cardElement?.dataset.arrangementCardId;
-      if (beforeId && beforeId !== arrangement.id) {
+      if (!beforeId || beforeId === arrangement.id) {
+        return null;
+      }
+
+      const cardRect = cardElement.getBoundingClientRect();
+      if (clientY > cardRect.top + cardRect.height / 2) {
+        target.afterId = beforeId;
+      } else {
         target.beforeId = beforeId;
       }
 
@@ -202,15 +233,94 @@ export default function ArrangementsPage({
 
       if (
         target.beforeId ||
-        target.status ||
-        target.priority ||
-        "dateKey" in target
+        target.afterId
       ) {
+        return target;
+      }
+      return null;
+    },
+    []
+  );
+
+  const updateDropIndicator = React.useCallback(
+    (arrangement: Arrangement, clientX: number, clientY: number) => {
+      const target = getDropTarget(arrangement, clientX, clientY);
+      if (!target) {
+        setDropIndicator(null);
+        return;
+      }
+
+      const anchorId = target.beforeId ?? target.afterId;
+      const anchorElement = anchorId
+        ? document.querySelector<HTMLElement>(
+            `[data-arrangement-card-id="${CSS.escape(anchorId)}"]`
+          )
+        : null;
+      const rect = anchorElement?.getBoundingClientRect();
+
+      if (!rect) {
+        setDropIndicator(null);
+        return;
+      }
+
+      setDropIndicator({
+        left: rect.left,
+        top: target.afterId ? rect.bottom + 5 : rect.top - 5,
+        width: rect.width,
+        target,
+      });
+    },
+    [getDropTarget]
+  );
+
+  const handleDragStart = React.useCallback(
+    (
+      arrangement: Arrangement,
+      clientX: number,
+      clientY: number,
+      rect: DOMRect
+    ) => {
+      setDragPreview({
+        arrangement,
+        clientX,
+        clientY,
+        width: rect.width,
+        height: rect.height,
+        offsetX: clientX - rect.left,
+        offsetY: clientY - rect.top,
+      });
+    },
+    []
+  );
+
+  const handleDragMove = React.useCallback(
+    (arrangement: Arrangement, clientX: number, clientY: number) => {
+      setDragPreview((current) =>
+        current && current.arrangement.id === arrangement.id
+          ? { ...current, clientX, clientY }
+          : current
+      );
+      updateDropIndicator(arrangement, clientX, clientY);
+    },
+    [updateDropIndicator]
+  );
+
+  const handleDragEnd = React.useCallback(
+    (arrangement: Arrangement, clientX: number, clientY: number) => {
+      const target = getDropTarget(arrangement, clientX, clientY);
+      setDragPreview(null);
+      setDropIndicator(null);
+      if (target) {
         onMove(arrangement, target);
       }
     },
-    [onMove]
+    [getDropTarget, onMove]
   );
+
+  const handleDragCancel = React.useCallback(() => {
+    setDragPreview(null);
+    setDropIndicator(null);
+  }, []);
 
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-bg">
@@ -288,9 +398,17 @@ export default function ArrangementsPage({
                       onOpen={() => onOpen(arrangement)}
                       onCycleStatus={() => onCycleStatus(arrangement)}
                       onDelete={() => onDelete(arrangement)}
-                      onMove={(clientX, clientY) =>
-                        handleMoveDrop(arrangement, clientX, clientY)
+                      dragging={dragPreview?.arrangement.id === arrangement.id}
+                      onDragStart={(clientX, clientY, rect) =>
+                        handleDragStart(arrangement, clientX, clientY, rect)
                       }
+                      onDragMove={(clientX, clientY) =>
+                        handleDragMove(arrangement, clientX, clientY)
+                      }
+                      onDragEnd={(clientX, clientY) =>
+                        handleDragEnd(arrangement, clientX, clientY)
+                      }
+                      onDragCancel={handleDragCancel}
                     />
                   ))}
                 </FlatArrangementSection>
@@ -312,9 +430,17 @@ export default function ArrangementsPage({
                       onOpen={() => onOpen(arrangement)}
                       onCycleStatus={() => onCycleStatus(arrangement)}
                       onDelete={() => onDelete(arrangement)}
-                      onMove={(clientX, clientY) =>
-                        handleMoveDrop(arrangement, clientX, clientY)
+                      dragging={dragPreview?.arrangement.id === arrangement.id}
+                      onDragStart={(clientX, clientY, rect) =>
+                        handleDragStart(arrangement, clientX, clientY, rect)
                       }
+                      onDragMove={(clientX, clientY) =>
+                        handleDragMove(arrangement, clientX, clientY)
+                      }
+                      onDragEnd={(clientX, clientY) =>
+                        handleDragEnd(arrangement, clientX, clientY)
+                      }
+                      onDragCancel={handleDragCancel}
                     />
                   ))}
                 </FlatArrangementSection>
@@ -336,9 +462,17 @@ export default function ArrangementsPage({
                       onOpen={() => onOpen(arrangement)}
                       onCycleStatus={() => onCycleStatus(arrangement)}
                       onDelete={() => onDelete(arrangement)}
-                      onMove={(clientX, clientY) =>
-                        handleMoveDrop(arrangement, clientX, clientY)
+                      dragging={dragPreview?.arrangement.id === arrangement.id}
+                      onDragStart={(clientX, clientY, rect) =>
+                        handleDragStart(arrangement, clientX, clientY, rect)
                       }
+                      onDragMove={(clientX, clientY) =>
+                        handleDragMove(arrangement, clientX, clientY)
+                      }
+                      onDragEnd={(clientX, clientY) =>
+                        handleDragEnd(arrangement, clientX, clientY)
+                      }
+                      onDragCancel={handleDragCancel}
                     />
                   ))}
                 </FlatArrangementSection>
@@ -385,9 +519,17 @@ export default function ArrangementsPage({
                                 onOpen={() => onOpen(arrangement)}
                                 onCycleStatus={() => onCycleStatus(arrangement)}
                                 onDelete={() => onDelete(arrangement)}
-                                onMove={(clientX, clientY) =>
-                                  handleMoveDrop(arrangement, clientX, clientY)
+                                dragging={dragPreview?.arrangement.id === arrangement.id}
+                                onDragStart={(clientX, clientY, rect) =>
+                                  handleDragStart(arrangement, clientX, clientY, rect)
                                 }
+                                onDragMove={(clientX, clientY) =>
+                                  handleDragMove(arrangement, clientX, clientY)
+                                }
+                                onDragEnd={(clientX, clientY) =>
+                                  handleDragEnd(arrangement, clientX, clientY)
+                                }
+                                onDragCancel={handleDragCancel}
                               />
                             ))}
                           </div>
@@ -406,6 +548,15 @@ export default function ArrangementsPage({
           toast={actionToast}
           onUndo={onUndoAction}
           onDismiss={onDismissActionToast}
+        />
+      )}
+
+      {dropIndicator && <DropInsertIndicator indicator={dropIndicator} />}
+
+      {dragPreview && (
+        <ArrangementDragPreview
+          preview={dragPreview}
+          arrangementTags={arrangementTags}
         />
       )}
 
@@ -534,21 +685,40 @@ function ArrangementListItem({
   onOpen,
   onCycleStatus,
   onDelete,
-  onMove,
+  dragging,
+  onDragStart,
+  onDragMove,
+  onDragEnd,
+  onDragCancel,
 }: {
   arrangement: Arrangement;
   arrangementTags: ArrangementTag[];
   onOpen: () => void;
   onCycleStatus: () => void;
   onDelete: () => void;
-  onMove: (clientX: number, clientY: number) => void;
+  dragging: boolean;
+  onDragStart: (clientX: number, clientY: number, rect: DOMRect) => void;
+  onDragMove: (clientX: number, clientY: number) => void;
+  onDragEnd: (clientX: number, clientY: number) => void;
+  onDragCancel: () => void;
 }) {
   const primaryTag = arrangementTags.find((tag) => tag.id === arrangement.primaryTagId);
   const [offsetX, setOffsetX] = React.useState(0);
   const [isSwiping, setIsSwiping] = React.useState(false);
-  const [isDragging, setIsDragging] = React.useState(false);
   const pointerStartRef = React.useRef<{ x: number; y: number; id: number } | null>(null);
-  const dragStartRef = React.useRef<{ x: number; y: number; id: number } | null>(null);
+  const dragStateRef = React.useRef<{
+    x: number;
+    y: number;
+    currentX: number;
+    currentY: number;
+    rect: DOMRect;
+    id: number;
+    longPressTimer: number | null;
+    dragging: boolean;
+    moved: boolean;
+    pointerType: string;
+    swipeLocked: boolean;
+  } | null>(null);
   const hasMovedRef = React.useRef(false);
   const deleteWidth = 74;
 
@@ -559,7 +729,34 @@ function ArrangementListItem({
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
+    if ((event.target as HTMLElement).closest("[data-arrangement-status-control]")) return;
+    const rect = event.currentTarget.getBoundingClientRect();
     pointerStartRef.current = { x: event.clientX, y: event.clientY, id: event.pointerId };
+    dragStateRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+      currentX: event.clientX,
+      currentY: event.clientY,
+      rect,
+      id: event.pointerId,
+      longPressTimer:
+        event.pointerType === "mouse"
+          ? null
+          : window.setTimeout(() => {
+              const state = dragStateRef.current;
+              if (!state || state.id !== event.pointerId || state.dragging) return;
+              state.dragging = true;
+              state.moved = false;
+              hasMovedRef.current = true;
+              closeSwipe();
+              onDragStart(state.currentX, state.currentY, state.rect);
+              onDragMove(state.currentX, state.currentY);
+            }, 360),
+      dragging: false,
+      moved: false,
+      pointerType: event.pointerType,
+      swipeLocked: false,
+    };
     hasMovedRef.current = false;
     setIsSwiping(true);
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -571,6 +768,41 @@ function ArrangementListItem({
 
     const deltaX = event.clientX - start.x;
     const deltaY = event.clientY - start.y;
+    const dragState = dragStateRef.current;
+    if (dragState) {
+      dragState.currentX = event.clientX;
+      dragState.currentY = event.clientY;
+    }
+
+    if (dragState?.dragging) {
+      event.preventDefault();
+      if (Math.abs(deltaX) > 6 || Math.abs(deltaY) > 6) {
+        dragState.moved = true;
+      }
+      onDragMove(event.clientX, event.clientY);
+      return;
+    }
+
+    if (dragState?.pointerType === "mouse" && !dragState.dragging && Math.abs(deltaY) > 8) {
+      dragState.dragging = true;
+      dragState.moved = true;
+      hasMovedRef.current = true;
+      closeSwipe();
+      onDragStart(event.clientX, event.clientY, dragState.rect);
+      onDragMove(event.clientX, event.clientY);
+      return;
+    }
+
+    if (dragState?.pointerType === "touch" && dragState.longPressTimer) {
+      if (!dragState.swipeLocked && deltaX < -14 && Math.abs(deltaX) > Math.abs(deltaY) * 1.25) {
+        dragState.swipeLocked = true;
+        window.clearTimeout(dragState.longPressTimer);
+        dragState.longPressTimer = null;
+      } else if (!dragState.swipeLocked) {
+        return;
+      }
+    }
+
     if (Math.abs(deltaY) > Math.abs(deltaX) && Math.abs(deltaY) > 8) return;
 
     const nextOffset = Math.min(0, Math.max(-deleteWidth, deltaX));
@@ -579,47 +811,38 @@ function ArrangementListItem({
   };
 
   const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    const dragState = dragStateRef.current;
     pointerStartRef.current = null;
+    dragStateRef.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (dragState?.longPressTimer) {
+      window.clearTimeout(dragState.longPressTimer);
+    }
+    if (dragState?.dragging) {
+      if (dragState.moved) {
+        onDragEnd(event.clientX, event.clientY);
+      } else {
+        onDragCancel();
+      }
+      setIsSwiping(false);
+      return;
     }
     setOffsetX((current) => (current < -deleteWidth / 2 ? -deleteWidth : 0));
     setIsSwiping(false);
   };
 
-  const handleDragPointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (event.pointerType === "mouse" && event.button !== 0) return;
-    event.stopPropagation();
+  const handlePointerCancel = () => {
+    const dragState = dragStateRef.current;
+    if (dragState?.longPressTimer) {
+      window.clearTimeout(dragState.longPressTimer);
+    }
+    dragStateRef.current = null;
+    pointerStartRef.current = null;
     closeSwipe();
-    dragStartRef.current = { x: event.clientX, y: event.clientY, id: event.pointerId };
-    hasMovedRef.current = true;
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-
-  const handleDragPointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
-    const start = dragStartRef.current;
-    if (!start) return;
-
-    const deltaX = event.clientX - start.x;
-    const deltaY = event.clientY - start.y;
-    if (Math.abs(deltaX) > 6 || Math.abs(deltaY) > 6) {
-      setIsDragging(true);
-    }
-  };
-
-  const handleDragPointerUp = (event: React.PointerEvent<HTMLButtonElement>) => {
-    const start = dragStartRef.current;
-    dragStartRef.current = null;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    setIsDragging(false);
-    if (!start) return;
-
-    const deltaX = event.clientX - start.x;
-    const deltaY = event.clientY - start.y;
-    if (Math.abs(deltaX) > 6 || Math.abs(deltaY) > 6) {
-      onMove(event.clientX, event.clientY);
+    if (dragState?.dragging) {
+      onDragCancel();
     }
   };
 
@@ -631,6 +854,10 @@ function ArrangementListItem({
     onOpen();
   };
 
+  const handleCardClick = () => {
+    handleOpen();
+  };
+
   const handleDelete = () => {
     closeSwipe();
     onDelete();
@@ -638,8 +865,8 @@ function ArrangementListItem({
 
   return (
     <article
-      className={`relative overflow-hidden rounded-[14px] ${
-        isDragging ? "opacity-80" : ""
+      className={`relative overflow-hidden rounded-[14px] transition-all duration-150 ${
+        dragging ? "opacity-25 scale-[0.99]" : ""
       }`}
       data-arrangement-card-id={arrangement.id}
     >
@@ -654,22 +881,19 @@ function ArrangementListItem({
       </div>
       <div
         className={`relative rounded-[14px] border border-border bg-surface px-3.5 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)] ${
-          isSwiping ? "" : "transition-transform duration-200 ease-out"
+          isSwiping || dragging ? "" : "transition-transform duration-200 ease-out"
         }`}
-        style={{ transform: `translateX(${offsetX}px)`, touchAction: "pan-y" }}
+        style={{ transform: `translateX(${dragging ? 0 : offsetX}px)`, touchAction: "none" }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onPointerCancel={closeSwipe}
-        onTouchCancel={closeSwipe}
+        onPointerCancel={handlePointerCancel}
+        onTouchCancel={handlePointerCancel}
+        onClick={handleCardClick}
       >
         <div className="flex items-start gap-3">
           <StatusCycleButton status={arrangement.status} onClick={onCycleStatus} />
-          <button
-            type="button"
-            className="min-w-0 flex-1 text-left transition active:scale-[0.995]"
-            onClick={handleOpen}
-          >
+          <div className="min-w-0 flex-1 text-left transition active:scale-[0.995]">
             <p className="line-clamp-2 text-[15px] font-semibold leading-5 text-text">
               {arrangement.title}
             </p>
@@ -691,22 +915,7 @@ function ArrangementListItem({
                 {priorityLabel(arrangement.priority)}
               </span>
             </div>
-          </button>
-          <button
-            type="button"
-            onPointerDown={handleDragPointerDown}
-            onPointerMove={handleDragPointerMove}
-            onPointerUp={handleDragPointerUp}
-            onPointerCancel={() => {
-              dragStartRef.current = null;
-              setIsDragging(false);
-            }}
-            className="mt-0.5 flex h-7 w-5 shrink-0 touch-none items-center justify-center rounded-full text-[16px] font-semibold leading-none text-text-disabled transition active:scale-95 active:text-text-muted"
-            aria-label="拖动调整安排"
-            title="拖动调整安排"
-          >
-            ⋮
-          </button>
+          </div>
         </div>
       </div>
     </article>
@@ -742,6 +951,7 @@ function StatusCycleButton({
   return (
     <button
       type="button"
+      data-arrangement-status-control
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => {
         event.stopPropagation();
@@ -755,6 +965,75 @@ function StatusCycleButton({
     </button>
   );
 }
+
+function DropInsertIndicator({ indicator }: { indicator: DropIndicatorState }) {
+  return (
+    <div
+      className="pointer-events-none fixed z-40 h-[3px] rounded-full bg-primary shadow-[0_0_0_4px_rgba(38,196,125,0.12)] transition-all duration-100"
+      style={{
+        left: indicator.left,
+        top: indicator.top,
+        width: indicator.width,
+      }}
+    >
+      <span className="absolute left-0 top-1/2 h-2 w-2 -translate-x-1 -translate-y-1/2 rounded-full bg-primary" />
+      <span className="absolute right-0 top-1/2 h-2 w-2 translate-x-1 -translate-y-1/2 rounded-full bg-primary" />
+    </div>
+  );
+}
+
+function ArrangementDragPreview({
+  preview,
+  arrangementTags,
+}: {
+  preview: DragPreviewState;
+  arrangementTags: ArrangementTag[];
+}) {
+  const primaryTag = arrangementTags.find(
+    (tag) => tag.id === preview.arrangement.primaryTagId
+  );
+
+  return (
+    <div
+      className="pointer-events-none fixed z-50 origin-top-left rounded-[14px] border border-primary/30 bg-surface px-3.5 py-3 opacity-95 shadow-[0_18px_42px_rgba(15,23,42,0.22)] transition-transform duration-75"
+      style={{
+        left: preview.clientX - preview.offsetX,
+        top: preview.clientY - preview.offsetY,
+        width: preview.width,
+        minHeight: preview.height,
+        transform: "scale(1.02) rotate(-0.4deg)",
+      }}
+    >
+      <div className="flex items-start gap-3">
+        <StatusCycleButton status={preview.arrangement.status} onClick={() => undefined} />
+        <div className="min-w-0 flex-1 text-left">
+          <p className="line-clamp-2 text-[15px] font-semibold leading-5 text-text">
+            {preview.arrangement.title}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+            {primaryTag && (
+              <span
+                className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium leading-4 text-white"
+                style={{ backgroundColor: primaryTag.color }}
+              >
+                {primaryTag.name}
+              </span>
+            )}
+            {preview.arrangement.timeText && (
+              <span className="text-[11px] leading-4 text-text-muted">
+                {preview.arrangement.timeText}
+              </span>
+            )}
+            <span className="text-[11px] leading-4 text-text-tertiary">
+              {priorityLabel(preview.arrangement.priority)}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function GroupModeSheet({
   selectedMode,
   onSelect,
@@ -955,6 +1234,7 @@ function statusToastMessage(status: ArrangementStatus) {
 
 function actionToastMessage(toast: NonNullable<ArrangementActionToast>) {
   if (toast.kind === "delete") return "已删除安排";
+  if (toast.kind === "move") return "已移动安排";
   return statusToastMessage(toast.nextStatus);
 }
 

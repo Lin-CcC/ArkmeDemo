@@ -146,10 +146,16 @@ type ArrangementActionToast =
       arrangement: Arrangement;
       index: number;
     }
+  | {
+      kind: "move";
+      arrangement: Arrangement;
+      index: number;
+    }
   | null;
 
 type ArrangementMoveTarget = {
   beforeId?: string;
+  afterId?: string;
   status?: Arrangement["status"];
   priority?: Arrangement["priority"];
   dateKey?: string | null;
@@ -1294,20 +1300,36 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
 
   const moveArrangement = React.useCallback(
     (arrangement: Arrangement, target: ArrangementMoveTarget) => {
+      let previousArrangement: Arrangement | null = null;
+      let previousIndex = 0;
       updateArrangements((current) => {
         const existing = current.find((item) => item.id === arrangement.id);
         if (!existing) return current;
+        previousArrangement = existing;
+        previousIndex = Math.max(0, current.findIndex((item) => item.id === arrangement.id));
+        const anchorId = target.beforeId ?? target.afterId;
+        const anchorArrangement = anchorId
+          ? current.find((item) => item.id === anchorId)
+          : undefined;
 
         const moved: Arrangement = {
           ...existing,
-          status: target.status ?? existing.status,
-          priority: target.priority ?? existing.priority,
+          status: target.status ?? anchorArrangement?.status ?? existing.status,
+          priority: target.priority ?? anchorArrangement?.priority ?? existing.priority,
           updatedAt: Date.now(),
         };
 
-        if ("dateKey" in target) {
-          if (target.dateKey) {
-            moved.dateText = target.dateKey;
+        const targetDateKey =
+          "dateKey" in target
+            ? target.dateKey
+            : anchorArrangement
+              ? getArrangementDateKeyForMove(anchorArrangement)
+              : undefined;
+
+        if (targetDateKey !== undefined) {
+          if (targetDateKey) {
+            moved.dateText = targetDateKey;
+            moved.timeText = formatMoveDateLabel(targetDateKey);
             if (moved.timeMode === "none") {
               moved.timeMode = "all_day";
             }
@@ -1335,6 +1357,16 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
           return next;
         }
 
+        const afterIndex =
+          target.afterId && target.afterId !== arrangement.id
+            ? next.findIndex((item) => item.id === target.afterId)
+            : -1;
+
+        if (afterIndex >= 0) {
+          next.splice(afterIndex + 1, 0, moved);
+          return next;
+        }
+
         const groupIndex = next.findIndex((item) =>
           arrangementMatchesMoveTarget(item, target)
         );
@@ -1345,6 +1377,13 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
 
         return [moved, ...next];
       });
+      if (previousArrangement) {
+        setArrangementActionToast({
+          kind: "move",
+          arrangement: previousArrangement,
+          index: previousIndex,
+        });
+      }
     },
     [updateArrangements]
   );
@@ -1361,10 +1400,16 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
             : item
         )
       );
-    } else {
+    } else if (toast.kind === "delete") {
       updateArrangements((current) => {
         if (current.some((item) => item.id === toast.arrangement.id)) return current;
         const next = [...current];
+        next.splice(Math.min(toast.index, next.length), 0, toast.arrangement);
+        return next;
+      });
+    } else {
+      updateArrangements((current) => {
+        const next = current.filter((item) => item.id !== toast.arrangement.id);
         next.splice(Math.min(toast.index, next.length), 0, toast.arrangement);
         return next;
       });
@@ -1632,7 +1677,42 @@ function arrangementMatchesMoveTarget(
 function getArrangementDateKeyForMove(arrangement: Arrangement) {
   const dateText = arrangement.dateText?.trim();
   if (dateText && /^\d{4}-\d{2}-\d{2}$/.test(dateText)) return dateText;
+  const scheduleText = [
+    arrangement.dateText,
+    arrangement.timeText,
+    arrangement.startText,
+    arrangement.endText,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  if (scheduleText.includes("今天") || scheduleText.includes("今日")) {
+    return getMoveLocalDateKey(0);
+  }
+  if (scheduleText.includes("明天") || scheduleText.includes("明日")) {
+    return getMoveLocalDateKey(1);
+  }
+  if (scheduleText.includes("后天")) {
+    return getMoveLocalDateKey(2);
+  }
   return null;
+}
+
+function formatMoveDateLabel(dateKey: string) {
+  if (dateKey === getMoveLocalDateKey(0)) return "今天";
+  if (dateKey === getMoveLocalDateKey(1)) return "明天";
+  if (dateKey === getMoveLocalDateKey(2)) return "后天";
+
+  const [, month, day] = dateKey.split("-");
+  return `${Number(month)}/${Number(day)}`;
+}
+
+function getMoveLocalDateKey(offsetDays: number) {
+  const date = new Date();
+  date.setDate(date.getDate() + offsetDays);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function SearchScreen({
