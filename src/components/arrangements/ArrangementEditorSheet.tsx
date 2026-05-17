@@ -1,4 +1,5 @@
 import React from "react";
+import { cn } from "@/lib/utils";
 import type {
   Arrangement,
   ArrangementDraft,
@@ -6,6 +7,7 @@ import type {
   ArrangementReminderOffset,
   ArrangementRepeatFrequency,
   ArrangementRepeatRule,
+  ArrangementSource,
   ArrangementStatus,
   ArrangementTag,
   ArrangementTimeMode,
@@ -15,7 +17,6 @@ type ArrangementEditorMode = "create" | "edit" | "confirm";
 type SheetType =
   | "priority"
   | "tag"
-  | "note"
   | "date"
   | "repeatEndDate"
   | "reminder"
@@ -30,6 +31,7 @@ type ArrangementEditorSheetProps = {
   arrangementTags: ArrangementTag[];
   onCreateTag: (name: string, color: string) => ArrangementTag;
   onClose: () => void;
+  onOpenSource?: (source: ArrangementSource) => void;
   onSave: (draft: ArrangementDraft) => void;
 };
 
@@ -81,7 +83,6 @@ const timeModeOptions: Array<{ value: Exclude<ArrangementTimeMode, "none">; labe
 ];
 
 const repeatOptions: Array<{ value: ArrangementRepeatFrequency; label: string }> = [
-  { value: "none", label: "不重复" },
   { value: "daily", label: "按天" },
   { value: "weekly", label: "按周" },
   { value: "monthly", label: "按月" },
@@ -105,24 +106,21 @@ export default function ArrangementEditorSheet({
   arrangementTags,
   onCreateTag,
   onClose,
+  onOpenSource,
   onSave,
 }: ArrangementEditorSheetProps) {
   const [draft, setDraft] = React.useState<ArrangementDraft>(emptyDraft);
-  const [sourceExpanded, setSourceExpanded] = React.useState(false);
   const [activeSheet, setActiveSheet] = React.useState<SheetType | null>(null);
   const [creatingTag, setCreatingTag] = React.useState(false);
   const [newTagName, setNewTagName] = React.useState("");
   const [newTagColor, setNewTagColor] = React.useState(recommendedColors[0]);
-  const [repeatExpanded, setRepeatExpanded] = React.useState(false);
 
   React.useEffect(() => {
     setDraft(normalizeInitialValue(initialValue, arrangementTags));
-    setSourceExpanded(false);
     setActiveSheet(null);
     setCreatingTag(false);
     setNewTagName("");
     setNewTagColor(recommendedColors[0]);
-    setRepeatExpanded(false);
   }, [arrangementTags, initialValue, open]);
 
   if (!open) return null;
@@ -185,7 +183,6 @@ export default function ArrangementEditorSheet({
         reminderEnabled: false,
         reminderOffset: "at_time",
       });
-      setRepeatExpanded(false);
       return;
     }
 
@@ -259,10 +256,11 @@ export default function ArrangementEditorSheet({
           <section className="rounded-[16px] border border-border bg-surface px-3 py-2">
             <p className="px-1 pb-1 text-[12px] font-semibold leading-5 text-text-muted">基础设置</p>
             <SettingRow label="标题">
-              <input
+              <InlineEditableText
                 value={draft.title}
-                onChange={(event) => updateDraft({ title: event.target.value })}
-                className="h-9 min-w-0 flex-1 bg-transparent px-0 text-right text-[15px] font-medium text-text outline-none placeholder:text-text-tertiary"
+                onChange={(value) => updateDraft({ title: value })}
+                ariaLabel="标题"
+                className="min-h-9 flex-1 py-2 text-right text-[15px] font-medium leading-5 text-text"
                 placeholder="例如：明天上午去医院"
               />
             </SettingRow>
@@ -294,41 +292,31 @@ export default function ArrangementEditorSheet({
                 {selectedTag?.name ?? "选择"}
               </CompactChip>
             </SettingRow>
-            <SettingRow label="备注" last>
-              <button
-                type="button"
-                onClick={() => setActiveSheet("note")}
-                className="min-w-0 flex-1 py-2 text-right text-[13px] leading-5 text-text"
-              >
-                <span className={`block truncate ${draft.note ? "text-text" : "text-text-tertiary"}`}>
-                  {draft.note?.trim() || "未填写"}
-                </span>
-              </button>
+            <SettingRow label="备注" last align="start">
+              <InlineEditableText
+                value={draft.note ?? ""}
+                onChange={(value) => updateDraft({ note: value })}
+                ariaLabel="备注"
+                multiline
+                className="min-h-9 flex-1 py-2 text-right text-[13px] leading-5 text-text"
+                placeholder="未填写"
+              />
             </SettingRow>
           </section>
 
           {draft.source && (
-            <section className="rounded-[14px] bg-surface px-3 py-3">
+            <section className="rounded-[16px] border border-border bg-surface px-3 py-3">
               <button
                 type="button"
-                onClick={() => setSourceExpanded((expanded) => !expanded)}
-                className="flex w-full items-center justify-between gap-3 text-left"
+                onClick={() => onOpenSource?.(draft.source!)}
+                disabled={!onOpenSource}
+                className="block w-full text-left disabled:cursor-default"
               >
-                <span>
-                  <span className="block text-[12px] font-semibold leading-5 text-text">来源消息</span>
-                  <span className="mt-0.5 block text-[12px] leading-5 text-text-muted">
-                    {draft.source.conversationTitle} · {draft.source.senderName}
-                  </span>
-                </span>
-                <span className="shrink-0 text-[18px] leading-none text-text-tertiary">
-                  {sourceExpanded ? "⌃" : "⌄"}
+                <span className="block text-[12px] font-semibold leading-5 text-text">来源消息</span>
+                <span className="mt-0.5 block truncate text-[12px] leading-5 text-text-muted">
+                  来自 {draft.source.senderName}：{draft.source.messageText}
                 </span>
               </button>
-              {sourceExpanded && (
-                <p className="mt-3 rounded-[12px] bg-bg px-3 py-2 text-[13px] leading-5 text-text">
-                  {draft.source.messageText}
-                </p>
-              )}
             </section>
           )}
 
@@ -432,22 +420,36 @@ export default function ArrangementEditorSheet({
                 />
 
                 <section className="px-1 py-3">
-                  <button
-                    type="button"
-                    onClick={() => setRepeatExpanded((expanded) => !expanded)}
-                    className="flex w-full items-center justify-between text-left"
-                  >
-                    <span>
-                      <span className="block text-[12px] font-semibold leading-5 text-text">重复</span>
-                      <span className="text-[12px] leading-5 text-text-muted">{repeatSummary(repeatRule)}</span>
-                    </span>
-                    <span className="text-[18px] leading-none text-text-tertiary">
-                      {repeatExpanded ? "⌃" : "⌄"}
-                    </span>
-                  </button>
-                  {repeatExpanded && (
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[13px] font-semibold leading-5 text-text">重复</p>
+                      <p className="mt-0.5 text-[11px] leading-4 text-text-tertiary">
+                        {repeatRule.frequency === "none" ? "关闭" : repeatSummary(repeatRule)}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        updateRepeatRule({
+                          frequency: repeatRule.frequency === "none" ? "daily" : "none",
+                          interval: repeatRule.frequency === "none" ? 1 : repeatRule.interval,
+                        })
+                      }
+                      className={`flex h-7 w-12 shrink-0 items-center rounded-full px-0.5 transition ${
+                        repeatRule.frequency !== "none" ? "bg-text" : "bg-fill-4"
+                      }`}
+                      aria-label={repeatRule.frequency !== "none" ? "关闭重复" : "开启重复"}
+                    >
+                      <span
+                        className={`block h-6 w-6 rounded-full bg-bg shadow-sm transition-transform ${
+                          repeatRule.frequency !== "none" ? "translate-x-[20px]" : "translate-x-0"
+                        }`}
+                      />
+                    </button>
+                  </div>
+                  {repeatRule.frequency !== "none" && (
                     <div className="mt-3 space-y-3">
-                      <div className="grid grid-cols-4 gap-1 rounded-[12px] bg-surface p-1">
+                      <div className="grid grid-cols-3 gap-1 rounded-[12px] bg-surface p-1">
                         {repeatOptions.map((option) => {
                           const active = repeatRule.frequency === option.value;
                           return (
@@ -464,36 +466,32 @@ export default function ArrangementEditorSheet({
                           );
                         })}
                       </div>
-                      {repeatRule.frequency !== "none" && (
-                        <>
-                          <label className="block">
-                            <span className="mb-1.5 block text-[12px] font-medium leading-4 text-text-muted">
-                              频率间隔
-                            </span>
-                            <input
-                              type="number"
-                              min={1}
-                              value={repeatRule.interval}
-                              onChange={(event) =>
-                                updateRepeatRule({ interval: Math.max(1, Number(event.target.value) || 1) })
-                              }
-                              className="h-10 w-full rounded-[12px] border border-border bg-surface px-3 text-[14px] text-text outline-none focus:border-primary"
-                            />
-                          </label>
-                          <button
-                            type="button"
-                            onClick={() => setActiveSheet("repeatEndDate")}
-                            className="flex w-full items-center justify-between rounded-[12px] border border-border bg-surface px-3 py-2 text-left"
-                          >
-                            <span>
-                              <span className="block text-[12px] text-text-muted">结束日期</span>
-                              <span className="block text-[13px] text-text">
-                                {repeatRule.endDate || "不设置结束"}
-                              </span>
-                            </span>
-                          </button>
-                        </>
-                      )}
+                      <label className="block">
+                        <span className="mb-1.5 block text-[12px] font-medium leading-4 text-text-muted">
+                          频率间隔
+                        </span>
+                        <input
+                          type="number"
+                          min={1}
+                          value={repeatRule.interval}
+                          onChange={(event) =>
+                            updateRepeatRule({ interval: Math.max(1, Number(event.target.value) || 1) })
+                          }
+                          className="h-10 w-full rounded-[12px] border border-border bg-surface px-3 text-[14px] text-text outline-none focus:border-primary"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setActiveSheet("repeatEndDate")}
+                        className="flex w-full items-center justify-between rounded-[12px] border border-border bg-surface px-3 py-2 text-left"
+                      >
+                        <span>
+                          <span className="block text-[12px] text-text-muted">结束日期</span>
+                          <span className="block text-[13px] text-text">
+                            {repeatRule.endDate || "不设置结束"}
+                          </span>
+                        </span>
+                      </button>
                     </div>
                   )}
                 </section>
@@ -545,13 +543,6 @@ export default function ArrangementEditorSheet({
                 onNewTagNameChange={setNewTagName}
                 onNewTagColorChange={setNewTagColor}
                 onCreateTag={handleCreateTag}
-              />
-            )}
-            {activeSheet === "note" && (
-              <NoteEditor
-                value={draft.note ?? ""}
-                onChange={(note) => updateDraft({ note })}
-                onDone={() => setActiveSheet(null)}
               />
             )}
             {activeSheet === "date" && (
@@ -614,16 +605,94 @@ function SettingRow({
   label,
   children,
   last = false,
+  align = "center",
 }: {
   label: string;
   children: React.ReactNode;
   last?: boolean;
+  align?: "center" | "start";
 }) {
   return (
-    <div className={`flex items-center justify-between gap-3 px-1 py-2 ${last ? "" : "border-b border-border/70"}`}>
-      <span className="w-12 shrink-0 text-[13px] font-medium leading-5 text-text-muted">{label}</span>
+    <div
+      className={cn(
+        "flex justify-between gap-3 px-1 py-2",
+        align === "start" ? "items-start" : "items-center",
+        !last && "border-b border-border/70"
+      )}
+    >
+      <span
+        className={cn(
+          "w-12 shrink-0 text-[13px] font-medium leading-5 text-text-muted",
+          align === "start" && "pt-2"
+        )}
+      >
+        {label}
+      </span>
       <div className="flex min-w-0 flex-1 justify-end">{children}</div>
     </div>
+  );
+}
+
+function InlineEditableText({
+  value,
+  onChange,
+  placeholder,
+  ariaLabel,
+  className,
+  multiline = false,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  ariaLabel: string;
+  className?: string;
+  multiline?: boolean;
+}) {
+  const textRef = React.useRef<HTMLDivElement>(null);
+  const isEditingRef = React.useRef(false);
+
+  React.useEffect(() => {
+    const node = textRef.current;
+    if (!node || isEditingRef.current || node.textContent === value) return;
+    node.textContent = value;
+  }, [value]);
+
+  const commitValue = () => {
+    const nextValue = textRef.current?.textContent ?? "";
+    onChange(nextValue.replace(/\u00a0/g, " "));
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (multiline) return;
+    if (event.key === "Enter") {
+      event.preventDefault();
+      textRef.current?.blur();
+    }
+  };
+
+  return (
+    <div
+      ref={textRef}
+      role="textbox"
+      aria-label={ariaLabel}
+      aria-multiline={multiline || undefined}
+      contentEditable
+      suppressContentEditableWarning
+      data-placeholder={placeholder}
+      onFocus={() => {
+        isEditingRef.current = true;
+      }}
+      onInput={commitValue}
+      onBlur={() => {
+        isEditingRef.current = false;
+        commitValue();
+      }}
+      onKeyDown={handleKeyDown}
+      className={cn(
+        "min-w-0 cursor-text whitespace-pre-wrap break-words bg-transparent outline-none empty:before:content-[attr(data-placeholder)] empty:before:text-text-tertiary focus-visible:ring-0",
+        className
+      )}
+    />
   );
 }
 
@@ -840,32 +909,6 @@ function TagPicker({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function NoteEditor({
-  value,
-  onChange,
-  onDone,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  onDone: () => void;
-}) {
-  return (
-    <div>
-      <h3 className="text-[16px] font-semibold text-text">备注</h3>
-      <textarea
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        rows={5}
-        className="mt-3 w-full resize-none rounded-[14px] border border-border bg-surface px-3 py-2.5 text-[14px] leading-5 text-text outline-none focus:border-primary"
-        placeholder="补充你想记住的细节"
-      />
-      <button type="button" onClick={onDone} className="mt-3 h-10 w-full rounded-[12px] bg-text text-[14px] font-semibold text-bg">
-        完成
-      </button>
     </div>
   );
 }

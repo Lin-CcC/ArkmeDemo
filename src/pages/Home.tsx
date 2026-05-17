@@ -62,7 +62,12 @@ import {
   type ThemeMode,
 } from "@/settings/preferences";
 import type { PageType } from "@/App";
-import type { Arrangement, ArrangementDraft, ArrangementTag } from "@/types/arrangement";
+import type {
+  Arrangement,
+  ArrangementDraft,
+  ArrangementSource,
+  ArrangementTag,
+} from "@/types/arrangement";
 import type { RecordItem, RecordReference, RecordSourceConversation } from "@/types/record";
 
 type HomeProps = {
@@ -398,6 +403,7 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
   const [sendToSelfTargetUid, setSendToSelfTargetUid] = React.useState<string | null>(null);
   const [activeTestIdentityId, setActiveTestIdentityId] = React.useState<string | null>(null);
   const [testConversationTargetUid, setTestConversationTargetUid] = React.useState<string | null>(null);
+  const [testConversationTargetSignal, setTestConversationTargetSignal] = React.useState(0);
   const [settingsView, setSettingsView] = React.useState<null | "settings" | "appearance" | "ai" | "about">(
     null
   );
@@ -985,6 +991,9 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
       setConversationReturnContext(returnContext);
       setActiveTestIdentityId(conversationId);
       setTestConversationTargetUid(targetUid);
+      if (targetUid) {
+        setTestConversationTargetSignal((signal) => signal + 1);
+      }
       setShowMenu(false);
       setShowAiConversation(false);
       setShowSendToSelf(false);
@@ -1448,11 +1457,28 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
     setPendingArrangementDraft(null);
   }, []);
 
+  const openArrangementSource = React.useCallback(
+    (source: ArrangementSource) => {
+      const returnContext: ConversationReturnContext = {
+        mode: "previous",
+        recordDetail,
+        recordSnapshot,
+      };
+
+      setRecordDetail(null);
+      setRecordSnapshot(null);
+      setArrangementEditor(null);
+      openTestConversation(source.conversationId, `test-${source.messageId}`, returnContext);
+    },
+    [openTestConversation, recordDetail, recordSnapshot]
+  );
+
   const pendingArrangementOverlay = pendingArrangementDraft ? (
     <PendingArrangementCard
       draft={pendingArrangementDraft}
       arrangementTags={arrangementTags}
       onOpenEditor={openPendingArrangementEditor}
+      onOpenSource={openArrangementSource}
       onConfirm={confirmPendingArrangement}
       onDismiss={dismissPendingArrangement}
     />
@@ -1526,6 +1552,7 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
         <TestIdentityConversationChat
           summary={activeTestConversationSummary}
           targetUid={testConversationTargetUid}
+          targetSignal={testConversationTargetSignal}
           onBack={handleConversationBack}
           onOpenRecordDetail={setRecordDetail}
           onOpenRecordSnapshot={setRecordSnapshot}
@@ -1533,6 +1560,7 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
           pendingArrangementDraft={activeSourcePendingArrangementDraft}
           arrangementTags={arrangementTags}
           onOpenPendingArrangementEditor={openPendingArrangementEditor}
+          onOpenPendingArrangementSource={openArrangementSource}
           onConfirmPendingArrangement={confirmPendingArrangement}
           onDismissPendingArrangement={dismissPendingArrangement}
         />
@@ -1663,6 +1691,7 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
             arrangementTags={arrangementTags}
             onCreateTag={createArrangementTag}
             onClose={() => setArrangementEditor(null)}
+            onOpenSource={openArrangementSource}
             onSave={saveArrangementDraft}
           />
         </div>
@@ -2860,6 +2889,7 @@ function SendToSelfConversationChat({
 function TestIdentityConversationChat({
   summary,
   targetUid,
+  targetSignal,
   onBack,
   onOpenRecordDetail,
   onOpenRecordSnapshot,
@@ -2867,11 +2897,13 @@ function TestIdentityConversationChat({
   pendingArrangementDraft,
   arrangementTags,
   onOpenPendingArrangementEditor,
+  onOpenPendingArrangementSource,
   onConfirmPendingArrangement,
   onDismissPendingArrangement,
 }: {
   summary: TestConversationSummary;
   targetUid?: string | null;
+  targetSignal?: number;
   onBack: () => void;
   onOpenRecordDetail: (record: RecordItem) => void;
   onOpenRecordSnapshot: (record: RecordItem) => void;
@@ -2879,6 +2911,7 @@ function TestIdentityConversationChat({
   pendingArrangementDraft?: ArrangementDraft | null;
   arrangementTags: ArrangementTag[];
   onOpenPendingArrangementEditor: () => void;
+  onOpenPendingArrangementSource: (source: ArrangementSource) => void;
   onConfirmPendingArrangement: () => void;
   onDismissPendingArrangement: () => void;
 }) {
@@ -2902,7 +2935,7 @@ function TestIdentityConversationChat({
     }
 
     container.scrollTop = container.scrollHeight;
-  }, [sortedRecords.length, targetUid]);
+  }, [sortedRecords.length, targetSignal, targetUid]);
 
   return (
     <div className="flex h-full flex-col bg-bg">
@@ -2950,10 +2983,7 @@ function TestIdentityConversationChat({
                     recordRefs.current.delete(record.uid);
                   }
                 }}
-                className={cn(
-                  "scroll-mt-4",
-                  targetUid === record.uid && "rounded-[18px] bg-primary-soft/70 py-1"
-                )}
+                className="scroll-mt-4"
               >
                 {showTime && (
                   <div className="mb-3 flex justify-center">
@@ -2969,7 +2999,14 @@ function TestIdentityConversationChat({
                   </div>
                 )}
                 {record.sender === "demo" ? (
-                  <div className="-mx-4">
+                  <div
+                    key={targetUid === record.uid ? `highlight-${targetSignal}` : record.uid}
+                    className={cn(
+                      "-mx-4 px-4",
+                      targetUid === record.uid &&
+                        "source-message-row-highlight relative rounded-[18px]"
+                    )}
+                  >
                     <ChatBubble
                       textContent={record.text_content}
                       disableAnimation
@@ -2982,7 +3019,14 @@ function TestIdentityConversationChat({
                     />
                   </div>
                 ) : (
-                  <div className="flex items-start gap-2.5">
+                  <div
+                    key={targetUid === record.uid ? `highlight-${targetSignal}` : record.uid}
+                    className={cn(
+                      "-mx-4 flex items-start gap-2.5 px-4 py-1",
+                      targetUid === record.uid &&
+                        "source-message-row-highlight relative rounded-[18px]"
+                    )}
+                  >
                     <TestMessageIdentityAvatar
                       identityId={record.identityId}
                       summary={summary}
@@ -3018,6 +3062,7 @@ function TestIdentityConversationChat({
             draft={pendingArrangementDraft}
             arrangementTags={arrangementTags}
             onOpenEditor={onOpenPendingArrangementEditor}
+            onOpenSource={onOpenPendingArrangementSource}
             onConfirm={onConfirmPendingArrangement}
             onDismiss={onDismissPendingArrangement}
           />

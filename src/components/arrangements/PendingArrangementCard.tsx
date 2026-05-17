@@ -1,10 +1,11 @@
 import React from "react";
-import type { ArrangementDraft, ArrangementTag } from "@/types/arrangement";
+import type { ArrangementDraft, ArrangementSource, ArrangementTag } from "@/types/arrangement";
 
 type PendingArrangementCardProps = {
   draft: ArrangementDraft;
   arrangementTags: ArrangementTag[];
   onOpenEditor: () => void;
+  onOpenSource?: (source: ArrangementSource) => void;
   onConfirm: () => void;
   onDismiss: () => void;
 };
@@ -13,6 +14,7 @@ export default function PendingArrangementCard({
   draft,
   arrangementTags,
   onOpenEditor,
+  onOpenSource,
   onConfirm,
   onDismiss,
 }: PendingArrangementCardProps) {
@@ -28,6 +30,7 @@ export default function PendingArrangementCard({
   const sourceText = draft.source
     ? `来自 ${draft.source.senderName}：${draft.source.messageText}`
     : "来自消息识别";
+  const canOpenSource = Boolean(draft.source && onOpenSource);
 
   const resetDrag = () => {
     dragStartXRef.current = null;
@@ -114,8 +117,9 @@ export default function PendingArrangementCard({
             )}
           </div>
         )}
-        <button
-          type="button"
+        <div
+          role="button"
+          tabIndex={0}
           onPointerDown={(event) => {
             startDrag(event.clientX, event.clientY);
             event.currentTarget.setPointerCapture(event.pointerId);
@@ -147,6 +151,7 @@ export default function PendingArrangementCard({
             onOpenEditor();
           }}
           onKeyDown={(event) => {
+            if (event.target !== event.currentTarget) return;
             if (event.key === "Enter" || event.key === " ") {
               event.preventDefault();
               onOpenEditor();
@@ -188,10 +193,37 @@ export default function PendingArrangementCard({
               <p className="mt-1.5 min-w-0 truncate text-[15px] font-medium leading-5 text-text">
                 {draft.title}
               </p>
-              <p className="mt-1 truncate text-[12px] leading-4 text-text-muted">{sourceText}</p>
+              {canOpenSource ? (
+                <button
+                  type="button"
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                  }}
+                  onPointerUp={(event) => {
+                    event.stopPropagation();
+                  }}
+                  onTouchStart={(event) => {
+                    event.stopPropagation();
+                  }}
+                  onTouchEnd={(event) => {
+                    event.stopPropagation();
+                  }}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (!draft.source || suppressClickRef.current) return;
+                    onOpenSource?.(draft.source);
+                  }}
+                  className="mt-1 block w-full truncate text-left text-[12px] leading-4 text-text-muted transition hover:text-text"
+                >
+                  {sourceText}
+                </button>
+              ) : (
+                <p className="mt-1 truncate text-[12px] leading-4 text-text-muted">{sourceText}</p>
+              )}
             </div>
           </div>
-        </button>
+        </div>
       </div>
     </div>
   );
