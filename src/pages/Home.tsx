@@ -11,13 +11,17 @@ import ArrangementsPage from "@/components/arrangements/ArrangementsPage";
 import PendingArrangementCard from "@/components/arrangements/PendingArrangementCard";
 import Records from "@/pages/Records";
 import {
+  arrangementTagsStorageEvent,
+  arrangementTagsStorageKey,
   arrangementsStorageEvent,
   clearPendingArrangementDraft,
   createArrangementFromDraft,
   getInitialArrangements,
+  getInitialArrangementTags,
   getInitialPendingArrangementDraft,
   pendingArrangementDraftStorageKey,
   pendingArrangementStorageEvent,
+  persistArrangementTags,
   persistArrangements,
 } from "@/data/arrangements";
 import { aiConversationLogEntries } from "@/data/aiConversationLog";
@@ -58,7 +62,7 @@ import {
   type ThemeMode,
 } from "@/settings/preferences";
 import type { PageType } from "@/App";
-import type { Arrangement, ArrangementDraft } from "@/types/arrangement";
+import type { Arrangement, ArrangementDraft, ArrangementTag } from "@/types/arrangement";
 import type { RecordItem, RecordReference, RecordSourceConversation } from "@/types/record";
 
 type HomeProps = {
@@ -386,6 +390,7 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
   const [testReadState, setTestReadState] =
     React.useState<TestReadState>(getInitialTestReadState);
   const [arrangements, setArrangements] = React.useState(getInitialArrangements);
+  const [arrangementTags, setArrangementTags] = React.useState(getInitialArrangementTags);
   const [pendingArrangementDraft, setPendingArrangementDraft] = React.useState(
     getInitialPendingArrangementDraft
   );
@@ -436,6 +441,9 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
     const refreshArrangements = () => {
       setArrangements(getInitialArrangements());
     };
+    const refreshArrangementTags = () => {
+      setArrangementTags(getInitialArrangementTags());
+    };
     const refreshPendingArrangement = () => {
       setPendingArrangementDraft(getInitialPendingArrangementDraft());
     };
@@ -443,14 +451,19 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
       if (event.key === pendingArrangementDraftStorageKey) {
         refreshPendingArrangement();
       }
+      if (event.key === arrangementTagsStorageKey) {
+        refreshArrangementTags();
+      }
     };
 
     window.addEventListener("storage", handleStorage);
     window.addEventListener(arrangementsStorageEvent, refreshArrangements);
+    window.addEventListener(arrangementTagsStorageEvent, refreshArrangementTags);
     window.addEventListener(pendingArrangementStorageEvent, refreshPendingArrangement);
     return () => {
       window.removeEventListener("storage", handleStorage);
       window.removeEventListener(arrangementsStorageEvent, refreshArrangements);
+      window.removeEventListener(arrangementTagsStorageEvent, refreshArrangementTags);
       window.removeEventListener(pendingArrangementStorageEvent, refreshPendingArrangement);
     };
   }, []);
@@ -1134,13 +1147,38 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
     });
   }, []);
 
+  const createArrangementTag = React.useCallback(
+    (name: string, color: string): ArrangementTag => {
+      const normalizedName = name.trim();
+      const existingTag = arrangementTags.find(
+        (tag) => tag.name.trim().toLowerCase() === normalizedName.toLowerCase()
+      );
+      if (existingTag) return existingTag;
+
+      const nextTag: ArrangementTag = {
+        id: `custom-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name: normalizedName,
+        color,
+        source: "custom",
+      };
+      const nextTags = [...arrangementTags, nextTag];
+      setArrangementTags(nextTags);
+      persistArrangementTags(nextTags);
+      return nextTag;
+    },
+    [arrangementTags]
+  );
+
   const openCreateArrangement = React.useCallback(() => {
     setArrangementEditor({
       mode: "create",
       value: {
         title: "",
-        priority: "normal",
-        tags: [],
+        priority: "not_important_not_urgent",
+        primaryTagId: "other",
+        tagIds: ["other"],
+        timeMode: "none",
+        repeatRule: { frequency: "none", interval: 1 },
       },
     });
   }, []);
@@ -1204,7 +1242,7 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
       updateArrangements((current) =>
         current.map((item) =>
           item.id === arrangement.id
-            ? { ...item, status: "later", updatedAt: Date.now() }
+            ? { ...item, status: "abandoned", updatedAt: Date.now() }
             : item
         )
       );
@@ -1351,6 +1389,7 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
       return (
         <ArrangementsPage
           arrangements={arrangements}
+          arrangementTags={arrangementTags}
           onCreate={openCreateArrangement}
           onOpen={openArrangementDetail}
           onComplete={completeArrangement}
@@ -1431,6 +1470,8 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
             open={Boolean(arrangementEditor)}
             mode={arrangementEditor?.mode ?? "create"}
             initialValue={arrangementEditor?.value ?? null}
+            arrangementTags={arrangementTags}
+            onCreateTag={createArrangementTag}
             onClose={() => setArrangementEditor(null)}
             onSave={saveArrangementDraft}
           />

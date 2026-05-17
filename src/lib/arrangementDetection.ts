@@ -1,5 +1,5 @@
 import type { TestConversationType, TestMessage } from "@/data/testConversations";
-import type { ArrangementDraft } from "@/types/arrangement";
+import type { ArrangementDraft, ArrangementPriority } from "@/types/arrangement";
 
 type ArrangementDetectionContext = {
   conversationTitle: string;
@@ -42,20 +42,18 @@ export function detectArrangementFromMessage(
   if (!hasHint) return null;
 
   const timeText = detectTimeText(text);
-  const priority = /一定|必须|务必|重要|记得/.test(text) ? "important" : "normal";
-  const tags = detectTags(text);
-  const placeText = detectPlaceText(text);
+  const priority = detectPriority(text);
+  const primaryTagId = detectPrimaryTagId(text);
 
   return {
     title: buildDetectedTitle(text),
     status: "active",
     timeText,
-    startText: timeText,
-    endText: undefined,
+    timeMode: timeText ? "point" : "none",
+    repeatRule: { frequency: "none", interval: 1 },
     priority,
-    tags,
-    personText: context.senderName,
-    placeText,
+    primaryTagId,
+    tagIds: [primaryTagId],
     note: "来自测试消息识别，请确认内容后再加入安排。",
     source: {
       type: "sendtest",
@@ -78,22 +76,22 @@ function detectTimeText(text: string) {
   return [dayMatch, periodMatch, clockMatch].filter(Boolean).join(" ") || undefined;
 }
 
-function detectTags(text: string) {
-  const tags: string[] = [];
-  if (/医院|体检|检查|挂号|身体/.test(text)) tags.push("健康");
-  if (/早餐|午餐|晚餐|带|买/.test(text)) tags.push("生活");
-  if (/公司|会议|开会|客户|面试/.test(text)) tags.push("工作");
-  if (/学校|课程|作业|考试/.test(text)) tags.push("学习");
-  if (tags.length === 0) tags.push("待确认");
-  return tags.slice(0, 3);
+function detectPriority(text: string): ArrangementPriority {
+  const important = /一定|必须|务必|重要|记得|复查|面试/.test(text);
+  const urgent = /今天|明天|马上|尽快|上午|下午|晚上/.test(text);
+  if (important && urgent) return "important_urgent";
+  if (important) return "important_not_urgent";
+  if (urgent) return "urgent_not_important";
+  return "not_important_not_urgent";
 }
 
-function detectPlaceText(text: string) {
-  if (text.includes("医院")) return "医院";
-  if (text.includes("公司")) return "公司";
-  if (text.includes("学校")) return "学校";
-  if (text.includes("家")) return "家";
-  return undefined;
+function detectPrimaryTagId(text: string) {
+  if (/医院|体检|检查|复查|挂号|身体/.test(text)) return "health";
+  if (/作业|考试|课程|阅读|学校|学习/.test(text)) return "study";
+  if (/公司|会议|开会|客户|面试|工作/.test(text)) return "work";
+  if (/早餐|午餐|晚餐|买菜|取快递|缴费|带/.test(text)) return "daily";
+  if (/爸爸|妈妈|家人|孩子|家庭/.test(text)) return "family";
+  return "other";
 }
 
 function buildDetectedTitle(text: string) {

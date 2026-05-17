@@ -1,8 +1,31 @@
 import type { TestConversationType } from "@/data/testConversations";
 
-export type ArrangementStatus = "active" | "completed" | "later";
+export type ArrangementStatus = "active" | "completed" | "abandoned";
 
-export type ArrangementPriority = "normal" | "important";
+export type ArrangementPriority =
+  | "important_urgent"
+  | "important_not_urgent"
+  | "urgent_not_important"
+  | "not_important_not_urgent";
+
+export type ArrangementTimeMode = "none" | "point" | "range" | "all_day";
+
+export type ArrangementRepeatFrequency = "none" | "daily" | "weekly" | "monthly";
+
+export type ArrangementRepeatRule = {
+  frequency: ArrangementRepeatFrequency;
+  interval: number;
+  endDate?: string;
+};
+
+export type ArrangementReminderOffset = "at_time" | "5m" | "15m" | "1h" | "1d";
+
+export type ArrangementTag = {
+  id: string;
+  name: string;
+  color: string;
+  source: "system" | "custom";
+};
 
 export type ArrangementSource = {
   type: "sendtest";
@@ -23,8 +46,18 @@ export type Arrangement = {
   timeText?: string;
   startText?: string;
   endText?: string;
+  timeMode: ArrangementTimeMode;
+  dateText?: string;
+  pointTime?: string;
+  startTime?: string;
+  endTime?: string;
+  repeatRule: ArrangementRepeatRule;
+  reminderEnabled?: boolean;
+  reminderOffset?: ArrangementReminderOffset;
   priority: ArrangementPriority;
-  tags: string[];
+  primaryTagId: string;
+  tagIds: string[];
+  tags?: string[];
   personText?: string;
   placeText?: string;
   note?: string;
@@ -39,8 +72,18 @@ export type ArrangementDraft = {
   timeText?: string;
   startText?: string;
   endText?: string;
+  timeMode?: ArrangementTimeMode;
+  dateText?: string;
+  pointTime?: string;
+  startTime?: string;
+  endTime?: string;
+  repeatRule?: ArrangementRepeatRule;
+  reminderEnabled?: boolean;
+  reminderOffset?: ArrangementReminderOffset;
   priority: ArrangementPriority;
-  tags: string[];
+  primaryTagId: string;
+  tagIds: string[];
+  tags?: string[];
   personText?: string;
   placeText?: string;
   note?: string;
